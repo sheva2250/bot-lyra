@@ -101,8 +101,8 @@ app = web.Application()
 app.router.add_get('/', handle)
 
 def run_server():
-    port = int(os.environ.get("PORT", 8080)) # Ambil port dari sistem atau default 8080
-    web.run_app(app, port=port)
+    port = int(os.environ.get("PORT", 8080))
+    web.run_app(app, port=port, handle_signals=False)
 
 t = Thread(target=run_server)
 t.start()
@@ -284,4 +284,5 @@ if __name__ == "__main__":
                 periodic_save_task.cancel()
             save_data(conversation_histories, HISTORY_FILE)
             save_data(user_profiles_cache, PROFILES_FILE)
+
             print("[System] Data tersimpan. Bye bye!")
