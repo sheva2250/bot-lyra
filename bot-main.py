@@ -178,14 +178,18 @@ async def on_message(message):
                 user_profiles_cache[user_id_str] = {'summary': user_summary, 'last_updated': datetime.now().isoformat()}
 
         # --- Persona Selection ---
+        active_system_prompt = SYSTEM_PROMPT
+        
         if message.author.id == MASTER_ID:
-            active_system_prompt = SYSTEM_PROMPT_MASTER
-        else:
-            active_system_prompt = SYSTEM_PROMPT
+            active_system_prompt += "\n" + SYSTEM_PROMPT_MASTER
 
         if "Belum ada" not in user_summary and "Gagal" not in user_summary:
             active_system_prompt += f"\n\n# Info User:\n{user_summary}"
 
+        now = datetime.now()
+        waktu_str = now.strftime("%A, %d %B %Y, Jam %H:%M WIB")
+        active_system_prompt += f"\n\n[SYSTEM INFO: Saat ini adalah {waktu_str}. Ingat ini adalah waktu sekarang.]"
+        
         # --- Initiate Model ---
         dynamic_model_gemini = genai.GenerativeModel(
             model_name=MODEL_NAME,
@@ -286,3 +290,4 @@ if __name__ == "__main__":
             save_data(user_profiles_cache, PROFILES_FILE)
 
             print("[System] Data tersimpan. Bye bye!")
+
