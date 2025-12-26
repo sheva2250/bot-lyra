@@ -57,7 +57,7 @@ CURRENT_FAVORITE_MUSIC = random.choice(FAVORITE_MUSIC)
 CURRENT_FAVORITE_GAME = random.choice(FAVORITE_GAMES)
 
 # define AI model
-MODEL_NAME = "gemini-2.0-flash"
+MODEL_NAME = "gemini-2.5-flash"
 
 # AI Config
 SYSTEM_PROMPT = f"""
@@ -118,3 +118,4 @@ generation_config = {
     "max_output_tokens": 600,
 
 }
+
