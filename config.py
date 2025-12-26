@@ -13,6 +13,7 @@ api_keys = [
     os.getenv("GEMINI_API_KEY1"),
     os.getenv("GEMINI_API_KEY2"),
     os.getenv("GEMINI_API_KEY3"),
+    os.getenv("GEMINI_API_KEY4"),
 ]
 
 # deque key, jaga jaga aja well
@@ -56,7 +57,7 @@ CURRENT_FAVORITE_MUSIC = random.choice(FAVORITE_MUSIC)
 CURRENT_FAVORITE_GAME = random.choice(FAVORITE_GAMES)
 
 # define AI model
-MODEL_NAME = "gemini-2.5-flash"
+MODEL_NAME = "gemini-2.0-flash"
 
 # AI Config
 SYSTEM_PROMPT = f"""
@@ -115,4 +116,5 @@ Contoh Output yang Baik:
 generation_config = {
     "temperature": 0.4,
     "max_output_tokens": 600,
+
 }
