@@ -178,11 +178,11 @@ async def on_message(message):
                 user_profiles_cache[user_id_str] = {'summary': user_summary, 'last_updated': datetime.now().isoformat()}
 
         # --- Persona Selection ---
-        active_system_prompt = SYSTEM_PROMPT
-        
         if message.author.id == MASTER_ID:
-            active_system_prompt += "\n" + SYSTEM_PROMPT_MASTER
-
+            active_system_prompt = SYSTEM_PROMPT_MASTER
+        else:
+            active_system_prompt = SYSTEM_PROMPT
+            
         if "Belum ada" not in user_summary and "Gagal" not in user_summary:
             active_system_prompt += f"\n\n# Info User:\n{user_summary}"
 
@@ -290,4 +290,5 @@ if __name__ == "__main__":
             save_data(user_profiles_cache, PROFILES_FILE)
 
             print("[System] Data tersimpan. Bye bye!")
+
 
