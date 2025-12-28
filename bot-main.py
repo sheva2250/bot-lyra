@@ -8,7 +8,7 @@ import textwrap
 import os
 
 from google.api_core import exceptions as google_exceptions
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from discord.ext import commands
 from aiohttp import web
 from threading import Thread
@@ -38,6 +38,10 @@ SUMMARY_TRIGGER = 20
 KEEP_RECENT = 10
 
 user_cooldowns = {}
+
+# [OPTIMASI 1] RAM Cache untuk Profil User
+# Format: {uid: {'summary': str, 'time': datetime}}
+local_profile_cache = {}
 
 # =========
 # DISCORD CLIENT
@@ -141,33 +145,43 @@ async def on_message(message):
     print(f"[MSG] {user_name}: {user_question}")
 
     # =========
-    # Profiling (DB-based, TTL) - with better error handling
+    # [OPTIMASI 2] Profiling Smart Cache (RAM First -> DB -> Generate)
     user_summary = ""
-    try:
-        row = await get_profile(uid)
+    
+    # 1. Cek RAM (Instan)
+    if uid in local_profile_cache:
+        cached = local_profile_cache[uid]
+        if now - cached['time'] < timedelta(hours=PROFILE_TTL_HOURS):
+            user_summary = cached['summary']
+    
+    # 2. Cek DB (Kalau RAM kosong)
+    if not user_summary:
+        try:
+            row = await get_profile(uid)
+            if row:
+                last_updated = row["last_updated"]
+                # Handle timezone awareness (Postgres usually returns aware datetime)
+                now_aware = datetime.now(last_updated.tzinfo) if last_updated.tzinfo else datetime.now()
+                
+                if now_aware - last_updated < timedelta(hours=PROFILE_TTL_HOURS):
+                    user_summary = row["summary"]
+                    # Update RAM Cache
+                    local_profile_cache[uid] = {'summary': user_summary, 'time': now}
+        except Exception as e:
+            print(f"[PROFILE DB ERROR] {e}")
 
-        if row:
-            # Fix timezone aware comparison (Naive vs Aware)
-            # Pastikan row['last_updated'] punya tzinfo, kalau tidak anggap UTC/Local yang sesuai
-            last_updated = row["last_updated"]
-            if last_updated.tzinfo is None:
-                # Fallback jika DB return naive datetime
-                time_diff = datetime.now() - last_updated
-            else:
-                # Jika DB return aware, gunakan now() yang aware juga (UTC) atau convert
-                time_diff = datetime.now(last_updated.tzinfo) - last_updated
-
-            if time_diff < timedelta(hours=PROFILE_TTL_HOURS):
-                user_summary = row["summary"]
-
-        if not user_summary:
+    # 3. Generate Baru (Kalau DB juga kosong/expired)
+    if not user_summary:
+        try:
             summary = await create_user_profile(uid, user_name)
             if summary and "Belum ada" not in summary and "Gagal" not in summary:
-                await save_profile(uid, summary)
+                # Fire & Forget Save Profile
+                asyncio.create_task(save_profile(uid, summary))
                 user_summary = summary
-    except Exception as e:
-        print(f"[PROFILE ERROR] {e}")
-        # Continue without profile if there's an error
+                # Simpan ke RAM biar chat berikutnya ngebut
+                local_profile_cache[uid] = {'summary': summary, 'time': now}
+        except Exception as e:
+            print(f"[PROFILE GEN ERROR] {e}")
 
     # =========
     # Persona
@@ -185,27 +199,35 @@ async def on_message(message):
     system_prompt += f"\n\n[SYSTEM INFO: Waktu sekarang {now.strftime('%A, %d %B %Y, %H:%M WIB')}]"
 
     # =========
-    # Load history with better error handling
+    # Load history
     history = []
     try:
         history = await load_history(uid) or []
         
-        # Summarize if needed
+        # Summarize Logic
         if len(history) > SUMMARY_TRIGGER:
             old_part = history[:-KEEP_RECENT]
-            # Convert history format for summarizer
             old_part_formatted = [
                 {"role": h["role"], "content": h["parts"][0]["text"]}
                 for h in old_part
             ]
-            summary = await summarize_history(old_part_formatted)
-            await save_memory_summary(uid, summary)
+            
+            # Fire & Forget Summarization (Biar gak nunggu)
+            async def background_summarize():
+                try:
+                    summary = await summarize_history(old_part_formatted)
+                    await save_memory_summary(uid, summary)
+                    await delete_old_history(uid, keep_last=KEEP_RECENT)
+                except Exception as e:
+                    print(f"[BG SUMMARIZE ERROR] {e}")
+            
+            asyncio.create_task(background_summarize())
 
-            await delete_old_history(uid, keep_last=KEEP_RECENT)
+            # Potong history lokal untuk dikirim ke Gemini sekarang
             history = history[-KEEP_RECENT:]
+            
     except Exception as e:
         print(f"[HISTORY ERROR] {e}")
-        # Continue with empty history if there's an error
 
     async with message.channel.typing():
         try:
@@ -220,34 +242,35 @@ async def on_message(message):
                     ai_answer = "Maaf, Ly gabisa jawab itu ya…"
 
             # =================================================================
-            # OPTIMASI FIRE & FORGET
+            # [OPTIMASI 3] PRIORITAS REPLY & NON-BLOCKING SAVE
             # =================================================================
 
-            # KIRIM REPLY KE USER (Prioritas Utama)
+            # A. KIRIM REPLY KE USER (Prioritas Utama - Langsung)
             def sanitize(t):
                 return t.replace("@everyone", "@\u200beveryone").replace("@here", "@\u200bhere")
 
             ai_answer_clean = sanitize(ai_answer)
             allowed = discord.AllowedMentions(everyone=False, roles=False, users=True)
 
-            # Split logic langsung dijalankan
             for i in range(0, len(ai_answer_clean), 1900):
                 await message.reply(ai_answer_clean[i:i+1900], mention_author=False, allowed_mentions=allowed)
 
-            # SAVE DATABASE & LOG DI BACKGROUND
+            # B. SAVE DB & LOG DI BACKGROUND (Menggunakan Executor untuk File I/O)
             async def background_save_task():
                 try:
-                    # Save DB
+                    # 1. Save DB (Async)
                     await append_message(uid, "user", user_question)
                     await append_message(uid, "model", ai_answer)
                     
-                    # Save Log File
-                    # (Meskipun sync I/O, di wrap dlm task biar gak ngeblock flow utama reply)
-                    log_interaction(uid, user_name, user_question, ai_answer)
+                    # 2. Save Log File (Blocking I/O) -> Run in Executor
+                    # Ini mencegah bot "Freeze" saat menulis file ke disk
+                    loop = asyncio.get_running_loop()
+                    await loop.run_in_executor(None, log_interaction, uid, user_name, user_question, ai_answer)
+                    
                 except Exception as e:
                     print(f"[BG SAVE ERROR] {e}")
 
-            # Eksekusi task di background
+            # Jalankan task di background
             asyncio.create_task(background_save_task())
 
         except Exception as e:
@@ -264,6 +287,10 @@ async def reset(ctx):
     try:
         pool = await get_pool()
         uid = str(ctx.author.id)
+        # Clear RAM Cache juga
+        if uid in local_profile_cache:
+            del local_profile_cache[uid]
+            
         async with pool.acquire() as conn:
             # Delete from all tables
             await conn.execute("DELETE FROM conversation_history WHERE user_id=$1", uid)
