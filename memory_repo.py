@@ -4,7 +4,7 @@ from db import get_pool
 MAX_HISTORY = 10
 MAX_ROWS = MAX_HISTORY * 2
 
-async def load_history(user_id: str):
+async def load_history(uid: str):
     try:
         pool = await get_pool()
         async with pool.acquire() as conn:
@@ -12,11 +12,11 @@ async def load_history(user_id: str):
                 """
                 select role, content
                 from conversation_history
-                where user_id = $1
+                where uid = $1
                 order by created_at asc
                 limit $2
                 """,
-                user_id,
+                uid,
                 MAX_ROWS
             )
 
@@ -30,16 +30,16 @@ async def load_history(user_id: str):
         return []
 
 
-async def append_message(user_id: str, role: str, content: str):
+async def append_message(uid: str, role: str, content: str):
     try:
         pool = await get_pool()
         async with pool.acquire() as conn:
             await conn.execute(
                 """
-                insert into conversation_history (user_id, role, content)
+                insert into conversation_history (uid, role, content)
                 values ($1, $2, $3)
                 """,
-                user_id,
+                uid,
                 role,
                 content
             )
@@ -47,7 +47,7 @@ async def append_message(user_id: str, role: str, content: str):
         print("[DB WARN] append_message failed:", e)
 
 
-async def trim_history_if_needed(user_id: str):
+async def trim_history_if_needed(uid: str):
     """
     Trim HANYA jika jumlah row > MAX_ROWS
     """
@@ -55,8 +55,8 @@ async def trim_history_if_needed(user_id: str):
         pool = await get_pool()
         async with pool.acquire() as conn:
             count = await conn.fetchval(
-                "select count(*) from conversation_history where user_id=$1",
-                user_id
+                "select count(*) from conversation_history where uid=$1",
+                uid
             )
 
             if count <= MAX_ROWS:
@@ -67,15 +67,16 @@ async def trim_history_if_needed(user_id: str):
                 delete from conversation_history
                 where id not in (
                     select id from conversation_history
-                    where user_id = $1
+                    where uid = $1
                     order by created_at desc
                     limit $2
                 )
-                and user_id = $1
+                and uid = $1
                 """,
-                user_id,
+                uid,
                 MAX_ROWS
             )
 
     except Exception as e:
         print("[DB WARN] trim_history failed:", e)
+
