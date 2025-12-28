@@ -239,9 +239,12 @@ async def on_message(message):
 async def reset(ctx):
     try:
         pool = await get_pool()
+        uid = str(ctx.author.id)
         async with pool.acquire() as conn:
-            await conn.execute("DELETE FROM conversation_history WHERE uid=$1", str(ctx.author.id))
-            await conn.execute("DELETE FROM memory_summaries WHERE uid=$1", str(ctx.author.id))
+            # Delete from all tables
+            await conn.execute("DELETE FROM conversation_history WHERE user_id=$1", uid)
+            await conn.execute("DELETE FROM memory_summaries WHERE user_id=$1", uid)
+            await conn.execute("DELETE FROM user_profiles WHERE user_id=$1", uid)
         await ctx.send("Ingatan Lyra tentangmu sudah dihapus.")
     except Exception as e:
         print(f"[RESET ERROR] {e}")
@@ -263,3 +266,4 @@ if __name__ == "__main__":
         raise RuntimeError("DISCORD_TOKEN tidak ditemukan")
 
     bot.run(DISCORD_TOKEN)
+
