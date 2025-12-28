@@ -15,7 +15,7 @@ from threading import Thread
 
 # Pastikan import module lokal kamu benar
 from config import (
-    API_KEY_POOL, DISCORD_TOKEN, GEMINI_API_KEY, MASTER_ID, BANNED_USERS,
+    API_KEY_POOL, DISCORD_TOKEN, MASTER_ID, BANNED_USERS,
     MODEL_NAME, SYSTEM_PROMPT, SYSTEM_PROMPT_MASTER, generation_config,
     HISTORY_FILE, PROFILES_FILE
 )
@@ -24,14 +24,6 @@ from bot_log import log_interaction
 from data_manager import load_data, save_data
 
 # =========
-# Config GEMINI
-try:
-    print("Mengonfigurasi Google Gemini...")
-    genai.configure(api_key=GEMINI_API_KEY)
-except Exception as e:
-    print(f"Gagal mengonfigurasi Gemini: {e}")
-    exit()
-
 # global var
 print("[System] Memuat data dari disk...")
 conversation_histories = load_data(HISTORY_FILE)
@@ -59,53 +51,49 @@ async def periodic_save_task():
 # =========
 # Logic Key Pool
 
-async def key_rotation(chat_session, user_question):
-    # Coba sebanyak jumlah kunci yang kita miliki
+async def key_rotation(chat_session, user_question, system_prompt):
     for i in range(len(API_KEY_POOL)):
         try:
-            # Coba kirim pesan
+            genai.configure(api_key=API_KEY_POOL[0])
+
+            model = genai.GenerativeModel(
+                model_name=MODEL_NAME,
+                system_instruction=system_prompt,
+                generation_config=generation_config
+            )
+
+            chat_session = model.start_chat(history=chat_session.history)
             response = await chat_session.send_message_async(user_question)
-            return response
+            return response, chat_session
 
         except google_exceptions.ResourceExhausted as e:
-            error_details = getattr(e, 'error_details', f"({e})")
-            print(f"[INFO] Key limit/cold. Detail: {error_details}")
+            print(f"[INFO] Key limit/cold: {e}")
 
             if i == len(API_KEY_POOL) - 1:
                 print("[ERROR] Semua kunci API habis.")
                 return None
 
-            # Cold system
-            delay = 2
-            print(f"[WAITING] Menunggu {delay} detik...")
-            await asyncio.sleep(delay)
-
-            # Rotasi kunci
+            await asyncio.sleep(2)
             API_KEY_POOL.rotate(-1)
-            new_key = API_KEY_POOL[0]
-            print(f"[KEY ROTATION] Ganti ke key: {new_key[:5]}...")
-
-            # Re-configure global key
-            genai.configure(api_key=new_key)
-
-            # NOTE: Idealnya chat_session perlu di-rebuild jika key berubah,
-            # tapi kita coba global config dulu untuk simplifikasi.
-
-    return None
+            print(f"[KEY ROTATION] Ganti ke key: {API_KEY_POOL[0][:5]}...")
 
 
 async def handle(request):
     return web.Response(text="Lyra is alive and running!")
 
+
 app = web.Application()
 app.router.add_get('/', handle)
+
 
 def run_server():
     port = int(os.environ.get("PORT", 8080))
     web.run_app(app, port=port, handle_signals=False)
 
+
 t = Thread(target=run_server)
 t.start()
+
 
 # =========
 # Event & Logic Bot
@@ -182,20 +170,13 @@ async def on_message(message):
             active_system_prompt = SYSTEM_PROMPT_MASTER
         else:
             active_system_prompt = SYSTEM_PROMPT
-            
+
         if "Belum ada" not in user_summary and "Gagal" not in user_summary:
             active_system_prompt += f"\n\n# Info User:\n{user_summary}"
 
         now = datetime.now()
         waktu_str = now.strftime("%A, %d %B %Y, Jam %H:%M WIB")
         active_system_prompt += f"\n\n[SYSTEM INFO: Saat ini adalah {waktu_str}. Ingat ini adalah waktu sekarang.]"
-        
-        # --- Initiate Model ---
-        dynamic_model_gemini = genai.GenerativeModel(
-            model_name=MODEL_NAME,
-            system_instruction=active_system_prompt,
-            generation_config=generation_config
-        )
 
         # --- History Management ---
         user_history = conversation_histories.setdefault(user_id_str, [])
@@ -205,8 +186,13 @@ async def on_message(message):
 
         async with message.channel.typing():
             try:
-                chat_session = dynamic_model_gemini.start_chat(history=user_history)
-                response = await key_rotation(chat_session, user_question)
+                chat_session = genai.GenerativeModel(
+                    model_name=MODEL_NAME,
+                    system_instruction=active_system_prompt,
+                    generation_config=generation_config
+                ).start_chat(history=user_history)
+
+                response, chat_session = await key_rotation(chat_session, user_question, active_system_prompt)
 
                 # --- FIX: Safety Filter Handling ---
                 if response is None:
@@ -226,7 +212,7 @@ async def on_message(message):
                 # Simpan history HANYA jika response sukses
                 if response and hasattr(response, 'text'):
                     serializable_history = [
-                        {'role': msg.role, 'parts': [part.text for part in msg.parts]}
+                        {'role': msg.role, 'parts': [{'text': part.text} for part in msg.parts]}
                         for msg in chat_session.history
                     ]
                     conversation_histories[user_id_str] = serializable_history
@@ -290,5 +276,3 @@ if __name__ == "__main__":
             save_data(user_profiles_cache, PROFILES_FILE)
 
             print("[System] Data tersimpan. Bye bye!")
-
-
