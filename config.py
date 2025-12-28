@@ -22,9 +22,6 @@ API_KEY_POOL = collections.deque([key for key in api_keys if key])
 if not API_KEY_POOL:
     raise ValueError("No API keys found")
 
-# pakai key pertama sebagai main key
-GEMINI_API_KEY = API_KEY_POOL[0]
-
 DATA_DIR = "data"
 LOGS_DIR = os.path.join(DATA_DIR, "logs")
 HISTORY_FILE = os.path.join(DATA_DIR, "conversation_history.json")
@@ -118,5 +115,6 @@ generation_config = {
     "max_output_tokens": 600,
 
 }
+
 
 
