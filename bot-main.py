@@ -184,7 +184,6 @@ async def on_message(message):
 
             await append_message(uid, "user", user_question)
             await append_message(uid, "model", ai_answer)
-            await trim_history_if_needed(uid)
 
             log_interaction(uid, user_name, user_question, ai_answer)
 
@@ -221,6 +220,7 @@ if __name__ == "__main__":
         raise RuntimeError("DISCORD_TOKEN tidak ditemukan")
 
     bot.run(DISCORD_TOKEN)
+
 
 
 
