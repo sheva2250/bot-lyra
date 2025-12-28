@@ -2,12 +2,16 @@
 from db import get_pool
 
 async def get_profile(user_id: str):
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        return await conn.fetchrow(
-            "select summary, last_updated from user_profiles where user_id=$1",
-            user_id
-        )
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            return await conn.fetchrow(
+                "select summary, last_updated from user_profiles where user_id=$1",
+                user_id
+            )
+    except Exception as e:
+        print("[DB WARN] get_profile failed:", e)
+        return None
 
 async def save_profile(user_id: str, summary: str):
     pool = await get_pool()
@@ -24,3 +28,4 @@ async def save_profile(user_id: str, summary: str):
             user_id,
             summary
         )
+
