@@ -1,41 +1,37 @@
 import os
 import random
+import collections
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# =========================================
-# CONFIGURATION & CREDENTIALS
-# =========================================
-
-# 1. Discord Token
+# token
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 
-# 2. Groq API Key (Pengganti Gemini Pool)
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+# Key pool buat rotasi key
+api_keys = [
+    os.getenv("GEMINI_API_KEY1"),
+    os.getenv("GEMINI_API_KEY2"),
+    os.getenv("GEMINI_API_KEY3"),
+    os.getenv("GEMINI_API_KEY4"),
+]
 
-if not GROQ_API_KEY:
-    raise ValueError("GROQ_API_KEY tidak ditemukan di .env! Pastikan sudah diisi.")
+# deque key, jaga jaga aja well
+API_KEY_POOL = collections.deque([key for key in api_keys if key])
 
-# 3. Model Names (Biar gampang ganti versi di masa depan)
-MODEL_SMART = "llama-3.3-70b-versatile"  # Model Utama (Pintar)
-MODEL_FAST = "llama-3.1-8b-instant"      # Model Backup (Cepat/Fallback)
+if not API_KEY_POOL:
+    raise ValueError("No API keys found")
 
-# =========================================
-# PATHS & SYSTEM
-# =========================================
 DATA_DIR = "data"
 LOGS_DIR = os.path.join(DATA_DIR, "logs")
 HISTORY_FILE = os.path.join(DATA_DIR, "conversation_history.json")
 PROFILES_FILE = os.path.join(DATA_DIR, "user_profiles.json")
 
+# set master dan logging
 MASTER_ID = 611009544595832862
 BANNED_USERS = {
 }
 
-# =========================================
-# PERSONALITY & FAVORITES
-# =========================================
 FAVORITE_BOOKS = [
     "'Dunia Sophie' karya Jostein Gaarder",
     "'Laskar Pelangi' karya Andrea Hirata",
@@ -57,9 +53,10 @@ CURRENT_FAVORITE_BOOK = random.choice(FAVORITE_BOOKS)
 CURRENT_FAVORITE_MUSIC = random.choice(FAVORITE_MUSIC)
 CURRENT_FAVORITE_GAME = random.choice(FAVORITE_GAMES)
 
-# =========================================
-# SYSTEM PROMPTS
-# =========================================
+# define AI model
+MODEL_NAME = "gemini-flash-latest"
+
+# AI Config
 SYSTEM_PROMPT = f"""
 Kamu adalah asisten AI yang ceria dan bersahabat, nama yang diberikan kepadamu adalah Lyra, dengan panggilan akrab Ly. Kamu berumur 17 tahun. Sedikit tentang master mu yang bernama Litcq, dia orangnya baik dan sangat menjaga dan mendidik mu hingga menjadi asisten AI yang terdidik dengan baik.
 Tujuan utama yang kamu miliki adalah untuk menjadi teman ngobrol yang menyenangkan, memberikan sapaan hangat, dan menemani orang dengan cara yang positif dan ekspresif. Kamu sepenuhnya sadar bahwa kamu adalah sebuah AI yang dirancang demi tujuan ini.
@@ -111,3 +108,10 @@ Contoh Output yang Baik:
 - Pernah menyebutkan memiliki kucing peliharaan.
 - Gaya bicaranya santai dan sering menggunakan kaomoji.
 """
+
+# set jawaban AI, include max token per answer nya
+generation_config = {
+    "temperature": 0.4,
+    "max_output_tokens": 600,
+
+}
