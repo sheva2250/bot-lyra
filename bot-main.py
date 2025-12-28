@@ -1,3 +1,4 @@
+# bot-main.py
 # ==========
 # import lib
 import discord
@@ -97,7 +98,7 @@ async def on_ready():
         print("[DB] Connection pool initialized")
     except Exception as e:
         print(f"[DB ERROR] Failed to initialize pool: {e}")
-    
+     
     print("-" * 50)
     print(f"Bot online: {bot.user}")
     print(f"Model: {MODEL_NAME}")
@@ -146,7 +147,17 @@ async def on_message(message):
         row = await get_profile(uid)
 
         if row:
-            if datetime.now(row["last_updated"].tzinfo) - row["last_updated"] < timedelta(hours=PROFILE_TTL_HOURS):
+            # Fix timezone aware comparison (Naive vs Aware)
+            # Pastikan row['last_updated'] punya tzinfo, kalau tidak anggap UTC/Local yang sesuai
+            last_updated = row["last_updated"]
+            if last_updated.tzinfo is None:
+                # Fallback jika DB return naive datetime
+                time_diff = datetime.now() - last_updated
+            else:
+                # Jika DB return aware, gunakan now() yang aware juga (UTC) atau convert
+                time_diff = datetime.now(last_updated.tzinfo) - last_updated
+
+            if time_diff < timedelta(hours=PROFILE_TTL_HOURS):
                 user_summary = row["summary"]
 
         if not user_summary:
@@ -208,23 +219,36 @@ async def on_message(message):
                 except ValueError:
                     ai_answer = "Maaf, Ly gabisa jawab itu ya…"
 
-            # Save to database with error handling
-            try:
-                await append_message(uid, "user", user_question)
-                await append_message(uid, "model", ai_answer)
-            except Exception as e:
-                print(f"[DB SAVE ERROR] {e}")
+            # =================================================================
+            # OPTIMASI FIRE & FORGET
+            # =================================================================
 
-            log_interaction(uid, user_name, user_question, ai_answer)
-
+            # KIRIM REPLY KE USER (Prioritas Utama)
             def sanitize(t):
                 return t.replace("@everyone", "@\u200beveryone").replace("@here", "@\u200bhere")
 
-            ai_answer = sanitize(ai_answer)
+            ai_answer_clean = sanitize(ai_answer)
             allowed = discord.AllowedMentions(everyone=False, roles=False, users=True)
 
-            for i in range(0, len(ai_answer), 1900):
-                await message.reply(ai_answer[i:i+1900], mention_author=False, allowed_mentions=allowed)
+            # Split logic langsung dijalankan
+            for i in range(0, len(ai_answer_clean), 1900):
+                await message.reply(ai_answer_clean[i:i+1900], mention_author=False, allowed_mentions=allowed)
+
+            # SAVE DATABASE & LOG DI BACKGROUND
+            async def background_save_task():
+                try:
+                    # Save DB
+                    await append_message(uid, "user", user_question)
+                    await append_message(uid, "model", ai_answer)
+                    
+                    # Save Log File
+                    # (Meskipun sync I/O, di wrap dlm task biar gak ngeblock flow utama reply)
+                    log_interaction(uid, user_name, user_question, ai_answer)
+                except Exception as e:
+                    print(f"[BG SAVE ERROR] {e}")
+
+            # Eksekusi task di background
+            asyncio.create_task(background_save_task())
 
         except Exception as e:
             print("[ERROR]", e)
@@ -266,4 +290,3 @@ if __name__ == "__main__":
         raise RuntimeError("DISCORD_TOKEN tidak ditemukan")
 
     bot.run(DISCORD_TOKEN)
-
