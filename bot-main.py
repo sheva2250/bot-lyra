@@ -20,7 +20,7 @@ from config import (
 )
 from user_profiler import create_user_profile
 from bot_log import log_interaction
-from memory_repo import load_history, append_message, trim_history, delete_old_history
+from memory_repo import load_history, append_message, trim_history_if_needed, delete_old_history
 from profile_repo import get_profile, save_profile
 from db import get_pool
 from memory_summarizer import summarize_history
@@ -221,6 +221,7 @@ if __name__ == "__main__":
         raise RuntimeError("DISCORD_TOKEN tidak ditemukan")
 
     bot.run(DISCORD_TOKEN)
+
 
 
 
