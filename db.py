@@ -16,7 +16,7 @@ async def init_pool():
             _pool = await asyncpg.create_pool(
                 DATABASE_URL,
                 min_size=1,
-                max_size=5,
+                max_size=20,
                 
                 timeout=10,
                 command_timeout=10,
@@ -55,3 +55,4 @@ async def close_pool():
     if _pool is not None:
         await _pool.close()
         _pool = None
+
