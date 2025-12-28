@@ -97,8 +97,6 @@ async def on_ready():
     print("Persona: Lyra")
     print("-" * 50)
 
-    asyncio.create_task(get_pool())
-
 @bot.event
 async def on_message(message):
     if message.author.bot or message.author == bot.user:
@@ -223,5 +221,6 @@ if __name__ == "__main__":
         raise RuntimeError("DISCORD_TOKEN tidak ditemukan")
 
     bot.run(DISCORD_TOKEN)
+
 
 
