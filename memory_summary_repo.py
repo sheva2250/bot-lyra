@@ -6,7 +6,7 @@ async def get_memory_summary(uid: str):
         pool = await get_pool()
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
-                "select summary from memory_summaries where uid=$1",
+                "select summary from memory_summaries where user_id=$1",
                 uid
             )
             return row["summary"] if row else ""
@@ -21,9 +21,9 @@ async def save_memory_summary(uid: str, summary: str):
         async with pool.acquire() as conn:
             await conn.execute(
                 """
-                insert into memory_summaries (uid, summary, updated_at)
+                insert into memory_summaries (user_id, summary, updated_at)
                 values ($1, $2, now())
-                on conflict (uid)
+                on conflict (user_id)
                 do update set
                   summary = excluded.summary,
                   updated_at = excluded.updated_at
@@ -33,4 +33,3 @@ async def save_memory_summary(uid: str, summary: str):
             )
     except Exception as e:
         print("[DB WARN] save_memory_summary failed:", e)
-
