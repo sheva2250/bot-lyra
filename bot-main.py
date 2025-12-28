@@ -8,49 +8,45 @@ import os
 
 from google.api_core import exceptions as google_exceptions
 from datetime import datetime, timedelta
-from discord.ext import tasks, commands
+from discord.ext import commands
 from aiohttp import web
 from threading import Thread
 
-# Pastikan import module lokal kamu benar
+# ==========
+# local imports
 from config import (
     API_KEY_POOL, DISCORD_TOKEN, MASTER_ID, BANNED_USERS,
-    MODEL_NAME, SYSTEM_PROMPT, SYSTEM_PROMPT_MASTER, generation_config,
-    HISTORY_FILE, PROFILES_FILE
+    MODEL_NAME, SYSTEM_PROMPT, SYSTEM_PROMPT_MASTER, generation_config
 )
 from user_profiler import create_user_profile
 from bot_log import log_interaction
-from data_manager import load_data, save_data
+from memory_repo import load_history, append_message, trim_history, delete_old_history
+from profile_repo import get_profile, save_profile
+from db import get_pool
+from memory_summarizer import summarize_history
+from memory_summary_repo import save_memory_summary, get_memory_summary
 
 # =========
-# global var
-print("[System] Memuat data dari disk...")
-conversation_histories = load_data(HISTORY_FILE)
-user_profiles_cache = load_data(PROFILES_FILE)
-user_cooldowns = {}
+# global config
+print("[System] Booting Lyra...")
+
 COOLDOWN = 5
+PROFILE_TTL_HOURS = 6
+MAX_HISTORY = 10
+SUMMARY_TRIGGER = 20
+KEEP_RECENT = 10
+
+user_cooldowns = {}
 
 # =========
-# DISCORD CLIENT SETUP (HANYA PAKAI SATU: BOT)
+# DISCORD CLIENT
 intents = discord.Intents.default()
 intents.message_content = True
-
-# Gunakan 'bot' saja, tidak perlu 'client_discord'
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-
-# bg task, auto save per 5 mins
-@tasks.loop(minutes=5)
-async def periodic_save_task():
-    print("[System] Menjalankan tugas penyimpanan berkala...")
-    save_data(conversation_histories, HISTORY_FILE)
-    save_data(user_profiles_cache, PROFILES_FILE)
-
-
 # =========
-# Logic Key Pool
-
-async def key_rotation(chat_session, user_question, system_prompt):
+# Gemini Key Rotation
+async def key_rotation(user_question, history, system_prompt):
     for i in range(len(API_KEY_POOL)):
         try:
             genai.configure(api_key=API_KEY_POOL[0])
@@ -61,220 +57,170 @@ async def key_rotation(chat_session, user_question, system_prompt):
                 generation_config=generation_config
             )
 
-            chat_session = model.start_chat(history=chat_session.history)
-            response = await chat_session.send_message_async(user_question)
-            return response, chat_session
+            chat = model.start_chat(history=history)
+            return await chat.send_message_async(user_question)
 
         except google_exceptions.ResourceExhausted as e:
-            print(f"[INFO] Key limit/cold: {e}")
+            print(f"[KEY LIMIT] {e}")
 
             if i == len(API_KEY_POOL) - 1:
-                print("[ERROR] Semua kunci API habis.")
                 return None
 
             await asyncio.sleep(2)
             API_KEY_POOL.rotate(-1)
-            print(f"[KEY ROTATION] Ganti ke key: {API_KEY_POOL[0][:5]}...")
+            print(f"[KEY ROTATION] Switch → {API_KEY_POOL[0][:5]}...")
 
-
-async def handle(request):
-    return web.Response(text="Lyra is alive and running!")
-
-
-app = web.Application()
-app.router.add_get('/', handle)
-
-
-def run_server():
-    port = int(os.environ.get("PORT", 8080))
-    web.run_app(app, port=port, handle_signals=False)
-
-
-t = Thread(target=run_server)
-t.start()
-
+    return None
 
 # =========
-# Event & Logic Bot
+# Keep-alive server (Render)
 
-@bot.event  # Ganti client_discord jadi bot
+async def handle(request):
+    return web.Response(text="Lyra is alive.")
+
+app = web.Application()
+app.router.add_get("/", handle)
+
+def run_server():
+    web.run_app(app, port=int(os.environ.get("PORT", 8080)), handle_signals=False)
+
+Thread(target=run_server, daemon=True).start()
+
+# =========
+# Events
+
+@bot.event
 async def on_ready():
     print("-" * 50)
-    print(f'Bot {bot.user} telah online.')  # Ganti client_discord jadi bot
-    print('Persona aktif: Lyra')
-    print(f'Model AI yang digunakan: {MODEL_NAME}')
+    print(f"Bot online: {bot.user}")
+    print(f"Model: {MODEL_NAME}")
+    print("Persona: Lyra")
     print("-" * 50)
-    print(f'Mention @{bot.user.name} untuk berinteraksi.')
-    if not periodic_save_task.is_running():
-        periodic_save_task.start()
 
+    # warmup db
+    await get_pool()
 
 @bot.event
 async def on_message(message):
-    if message.author == bot.user or message.author.bot:  # Ganti client_discord jadi bot
+    if message.author.bot or message.author == bot.user:
         return
 
-    # kondisi user ter-banned
     if message.author.id in BANNED_USERS:
         await message.reply("Maaf, Ly gamau ngobrol sama kamu.", mention_author=False)
         return
 
-    # Cek apakah user mention bot
-    if bot.user in message.mentions:  # Ganti client_discord jadi bot
+    if bot.user not in message.mentions:
+        await bot.process_commands(message)
+        return
 
-        # --- Logic Cooldown ---
-        if message.author.id != MASTER_ID:
-            current_time = datetime.now()
-            user_id_str_for_cooldown = str(message.author.id)
+    # =========
+    # Cooldown
+    uid = str(message.author.id)
+    now = datetime.now()
 
-            if user_id_str_for_cooldown in user_cooldowns:
-                time_since_last = user_cooldowns[user_id_str_for_cooldown]
-                if (current_time - time_since_last).total_seconds() < COOLDOWN:
-                    print(f"[System] Spam dari {message.author.name} diabaikan.")
-                    return
-            user_cooldowns[user_id_str_for_cooldown] = current_time
-
-        # --- Clean Mention & Get Question ---
-        cleaned_content = message.content
-        for mention in message.mentions:
-            cleaned_content = cleaned_content.replace(f'<@{mention.id}>', '').replace(f'<@!{mention.id}>', '')
-        user_question = cleaned_content.strip()
-
-        if not user_question:
+    if message.author.id != MASTER_ID:
+        if uid in user_cooldowns and (now - user_cooldowns[uid]).total_seconds() < COOLDOWN:
             return
+        user_cooldowns[uid] = now
 
-        print(f"\n[Pesan Diterima] Dari {message.author.name}: {user_question}")
+    # =========
+    # Clean mention
+    content = message.content
+    for m in message.mentions:
+        content = content.replace(f"<@{m.id}>", "").replace(f"<@!{m.id}>", "")
+    user_question = content.strip()
+    if not user_question:
+        return
 
-        user_id_str = str(message.author.id)
-        user_name = message.author.name
+    user_name = message.author.name
+    print(f"[MSG] {user_name}: {user_question}")
 
-        # --- Profiling Logic ---
-        user_summary = ""
-        cached_profile = user_profiles_cache.get(user_id_str)
-        # (Kode profiling kamu sudah oke, disingkat biar rapi di sini)
-        last_updated_time = None
-        if cached_profile:
-            last_updated_time = datetime.fromisoformat(cached_profile['last_updated'])
+    # =========
+    # Profiling (DB-based, TTL)
+    user_summary = ""
+    row = await get_profile(uid)
 
-        if cached_profile and (datetime.now() - last_updated_time) < timedelta(hours=6):
-            user_summary = cached_profile['summary']
-        else:
-            # Re-fetch profile logic
-            user_summary = await create_user_profile(user_id_str, user_name)
-            if "Belum ada" not in user_summary and "Gagal" not in user_summary:
-                user_profiles_cache[user_id_str] = {'summary': user_summary, 'last_updated': datetime.now().isoformat()}
+    if row:
+        if datetime.now(row["last_updated"].tzinfo) - row["last_updated"] < timedelta(hours=PROFILE_TTL_HOURS):
+            user_summary = row["summary"]
 
-        # --- Persona Selection ---
-        if message.author.id == MASTER_ID:
-            active_system_prompt = SYSTEM_PROMPT_MASTER
-        else:
-            active_system_prompt = SYSTEM_PROMPT
+    if not user_summary:
+        summary = await create_user_profile(uid, user_name)
+        if "Belum ada" not in summary and "Gagal" not in summary:
+            await save_profile(uid, summary)
+            user_summary = summary
 
-        if "Belum ada" not in user_summary and "Gagal" not in user_summary:
-            active_system_prompt += f"\n\n# Info User:\n{user_summary}"
+    # =========
+    # Persona
+    system_prompt = SYSTEM_PROMPT_MASTER if message.author.id == MASTER_ID else SYSTEM_PROMPT
+    if user_summary:
+        system_prompt += f"\n\n# Info User:\n{user_summary}"
 
-        now = datetime.now()
-        waktu_str = now.strftime("%A, %d %B %Y, Jam %H:%M WIB")
-        active_system_prompt += f"\n\n[SYSTEM INFO: Saat ini adalah {waktu_str}. Ingat ini adalah waktu sekarang.]"
+    memory_summary = await get_memory_summary(uid)
+    if memory_summary:
+        system_prompt += f"\n\n# Ringkasan Percakapan Sebelumnya:\n{memory_summary}"
 
-        # --- History Management ---
-        user_history = conversation_histories.setdefault(user_id_str, [])
-        MAX_HISTORY = 10
-        while len(user_history) > MAX_HISTORY:
-            del user_history[:2]  # FIX: Hapus per pasang (User+Model)
+    system_prompt += f"\n\n[SYSTEM INFO: Waktu sekarang {now.strftime('%A, %d %B %Y, %H:%M WIB')}]"
 
-        async with message.channel.typing():
-            try:
-                chat_session = genai.GenerativeModel(
-                    model_name=MODEL_NAME,
-                    system_instruction=active_system_prompt,
-                    generation_config=generation_config
-                ).start_chat(history=user_history)
+    # =========
+    # Load history
+    history = await load_history(uid) or []
+    if len(history) > SUMMARY_TRIGGER:
+        old_part = history[:-KEEP_RECENT]
+        summary = await summarize_history(old_part)
+        await save_memory_summary(uid, summary)
 
-                result = await key_rotation(chat_session, user_question, active_system_prompt)
+        await delete_old_history(uid, keep_last=KEEP_RECENT)
+        history = history[-KEEP_RECENT:]
 
-                if result is None:
-                    ai_answer = "Aduh, Ly lagi pusing (API Error/Limit)."
-                    response = None
-                else:
-                    response, chat_session = result
-                    try:
-                        ai_answer = response.text
-                    except ValueError:
-                        print(f"[BLOCKED] Feedback: {response.prompt_feedback}")
-                        ai_answer = "Maaf, Ly gabisa jawab itu karena melanggar safety guidelines Google >.<"
+    async with message.channel.typing():
+        try:
+            response = await key_rotation(user_question, history, system_prompt)
 
+            if response is None:
+                ai_answer = "Aduh, Ly lagi error internal…"
+            else:
+                try:
+                    ai_answer = response.text
+                except ValueError:
+                    ai_answer = "Maaf, Ly gabisa jawab itu ya…"
 
-                # Log & Save
-                log_interaction(user_id_str, user_name, user_question, ai_answer)
+            await append_message(uid, "user", user_question)
+            await append_message(uid, "model", ai_answer)
+            await trim_history(uid)
 
-                # Simpan history HANYA jika response sukses
-                if response and hasattr(response, 'text'):
-                    serializable_history = [
-                        {'role': msg.role, 'parts': [{'text': part.text} for part in msg.parts]}
-                        for msg in chat_session.history
-                    ]
-                    conversation_histories[user_id_str] = serializable_history
-                    while len(conversation_histories[user_id_str]) > MAX_HISTORY:
-                        del conversation_histories[user_id_str][:2]
+            log_interaction(uid, user_name, user_question, ai_answer)
 
-                # --- Split Message Logic ---
-                def sanitize_mass_mentions(text: str) -> str:
-                    for m in ("@everyone", "@here"):
-                        text = text.replace(m, "@\u200b" + m[1:])
-                    return text
+            def sanitize(t):
+                return t.replace("@everyone", "@\u200beveryone").replace("@here", "@\u200bhere")
 
-                def chunk(text, size=1900):
-                    if len(text) <= size:
-                        yield text
-                        return
+            ai_answer = sanitize(ai_answer)
+            allowed = discord.AllowedMentions(everyone=False, roles=False, users=True)
 
-                    chunks = textwrap.wrap(text, width=size, break_long_words=False, replace_whitespace=False)
-                    for part in chunks:
-                        yield part
+            for i in range(0, len(ai_answer), 1900):
+                await message.reply(ai_answer[i:i+1900], mention_author=False, allowed_mentions=allowed)
 
-                ai_answer = sanitize_mass_mentions(ai_answer)
-                allowed = discord.AllowedMentions(everyone=False, roles=False, users=True)
+        except Exception as e:
+            print("[ERROR]", e)
+            await message.reply("Terjadi kesalahan sistem.", mention_author=False)
 
-                for part in chunk(ai_answer):
-                    await message.reply(part, mention_author=False, allowed_mentions=allowed)
-
-            except Exception as e:
-                print(f"[ERROR] Bot Crash: {e}")
-                await message.reply("Terjadi kesalahan sistem.", mention_author=False)
-
-    # PENTING: Agar command !reset tetap jalan walaupun ada on_message
     await bot.process_commands(message)
-
 
 # =========
 # Commands
 
 @bot.command()
 async def reset(ctx):
-    user_id = str(ctx.author.id)
-    if user_id in conversation_histories:
-        del conversation_histories[user_id]
-        await ctx.send("Boom! Ingatan tentangmu sudah di-reset~ 🧹")
-    else:
-        await ctx.send("Kamu belum ada di ingatan Ly kok~")
-
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("DELETE FROM conversation_history WHERE user_id=$1", str(ctx.author.id))
+    await ctx.send("Ingatan Lyra tentangmu sudah dihapus.")
 
 # =========
-# Run Bot & Shutdown
+# Run
+
 if __name__ == "__main__":
     if not DISCORD_TOKEN:
-        print("Error: DISCORD_TOKEN tidak ditemukan!")
-    else:
-        try:
-            # GUNAKAN 'bot.run', BUKAN 'client_discord.run'
-            bot.run(DISCORD_TOKEN)
-        finally:
-            print("\n[System] Shutdown initiated...")
-            if periodic_save_task.is_running():
-                periodic_save_task.cancel()
-            save_data(conversation_histories, HISTORY_FILE)
-            save_data(user_profiles_cache, PROFILES_FILE)
+        raise RuntimeError("DISCORD_TOKEN tidak ditemukan")
 
-            print("[System] Data tersimpan. Bye bye!")
-
+    bot.run(DISCORD_TOKEN)
