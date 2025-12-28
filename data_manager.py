@@ -2,7 +2,6 @@
 import json
 import os
 import shutil
-from config import DATA_DIR
 
 # save dictionary ke file JSON
 def save_data(data, filename):
