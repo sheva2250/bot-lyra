@@ -13,19 +13,22 @@ async def get_profile(user_id: str):
         print("[DB WARN] get_profile failed:", e)
         return None
 
-async def save_profile(user_id: str, summary: str):
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        await conn.execute(
-            """
-            insert into user_profiles (user_id, summary, last_updated)
-            values ($1, $2, now())
-            on conflict (user_id)
-            do update set
-                summary = excluded.summary,
-                last_updated = excluded.last_updated
-            """,
-            user_id,
-            summary
-        )
 
+async def save_profile(user_id: str, summary: str):
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                insert into user_profiles (user_id, summary, last_updated)
+                values ($1, $2, now())
+                on conflict (user_id)
+                do update set
+                    summary = excluded.summary,
+                    last_updated = excluded.last_updated
+                """,
+                user_id,
+                summary
+            )
+    except Exception as e:
+        print("[DB WARN] save_profile failed:", e)
