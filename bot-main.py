@@ -22,7 +22,7 @@ from user_profiler import create_user_profile
 from bot_log import log_interaction
 from memory_repo import load_history, append_message, trim_history_if_needed, delete_old_history
 from profile_repo import get_profile, save_profile
-from db import get_pool
+from db import get_pool, init_pool, close_pool
 from memory_summarizer import summarize_history
 from memory_summary_repo import save_memory_summary, get_memory_summary
 
@@ -91,6 +91,13 @@ Thread(target=run_server, daemon=True).start()
 
 @bot.event
 async def on_ready():
+    # Initialize database pool on startup
+    try:
+        await init_pool()
+        print("[DB] Connection pool initialized")
+    except Exception as e:
+        print(f"[DB ERROR] Failed to initialize pool: {e}")
+    
     print("-" * 50)
     print(f"Bot online: {bot.user}")
     print(f"Model: {MODEL_NAME}")
@@ -133,19 +140,23 @@ async def on_message(message):
     print(f"[MSG] {user_name}: {user_question}")
 
     # =========
-    # Profiling (DB-based, TTL)
+    # Profiling (DB-based, TTL) - with better error handling
     user_summary = ""
-    row = await get_profile(uid)
+    try:
+        row = await get_profile(uid)
 
-    if row:
-        if datetime.now(row["last_updated"].tzinfo) - row["last_updated"] < timedelta(hours=PROFILE_TTL_HOURS):
-            user_summary = row["summary"]
+        if row:
+            if datetime.now(row["last_updated"].tzinfo) - row["last_updated"] < timedelta(hours=PROFILE_TTL_HOURS):
+                user_summary = row["summary"]
 
-    if not user_summary:
-        summary = await create_user_profile(uid, user_name)
-        if "Belum ada" not in summary and "Gagal" not in summary:
-            await save_profile(uid, summary)
-            user_summary = summary
+        if not user_summary:
+            summary = await create_user_profile(uid, user_name)
+            if summary and "Belum ada" not in summary and "Gagal" not in summary:
+                await save_profile(uid, summary)
+                user_summary = summary
+    except Exception as e:
+        print(f"[PROFILE ERROR] {e}")
+        # Continue without profile if there's an error
 
     # =========
     # Persona
@@ -153,22 +164,37 @@ async def on_message(message):
     if user_summary:
         system_prompt += f"\n\n# Info User:\n{user_summary}"
 
-    memory_summary = await get_memory_summary(uid)
-    if memory_summary:
-        system_prompt += f"\n\n# Ringkasan Percakapan Sebelumnya:\n{memory_summary}"
+    try:
+        memory_summary = await get_memory_summary(uid)
+        if memory_summary:
+            system_prompt += f"\n\n# Ringkasan Percakapan Sebelumnya:\n{memory_summary}"
+    except Exception as e:
+        print(f"[MEMORY SUMMARY ERROR] {e}")
 
     system_prompt += f"\n\n[SYSTEM INFO: Waktu sekarang {now.strftime('%A, %d %B %Y, %H:%M WIB')}]"
 
     # =========
-    # Load history
-    history = await load_history(uid) or []
-    if len(history) > SUMMARY_TRIGGER:
-        old_part = history[:-KEEP_RECENT]
-        summary = await summarize_history(old_part)
-        await save_memory_summary(uid, summary)
+    # Load history with better error handling
+    history = []
+    try:
+        history = await load_history(uid) or []
+        
+        # Summarize if needed
+        if len(history) > SUMMARY_TRIGGER:
+            old_part = history[:-KEEP_RECENT]
+            # Convert history format for summarizer
+            old_part_formatted = [
+                {"role": h["role"], "content": h["parts"][0]["text"]}
+                for h in old_part
+            ]
+            summary = await summarize_history(old_part_formatted)
+            await save_memory_summary(uid, summary)
 
-        await delete_old_history(uid, keep_last=KEEP_RECENT)
-        history = history[-KEEP_RECENT:]
+            await delete_old_history(uid, keep_last=KEEP_RECENT)
+            history = history[-KEEP_RECENT:]
+    except Exception as e:
+        print(f"[HISTORY ERROR] {e}")
+        # Continue with empty history if there's an error
 
     async with message.channel.typing():
         try:
@@ -182,8 +208,12 @@ async def on_message(message):
                 except ValueError:
                     ai_answer = "Maaf, Ly gabisa jawab itu ya…"
 
-            await append_message(uid, "user", user_question)
-            await append_message(uid, "model", ai_answer)
+            # Save to database with error handling
+            try:
+                await append_message(uid, "user", user_question)
+                await append_message(uid, "model", ai_answer)
+            except Exception as e:
+                print(f"[DB SAVE ERROR] {e}")
 
             log_interaction(uid, user_name, user_question, ai_answer)
 
@@ -207,10 +237,23 @@ async def on_message(message):
 
 @bot.command()
 async def reset(ctx):
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        await conn.execute("DELETE FROM conversation_history WHERE uid=$1", str(ctx.author.id))
-    await ctx.send("Ingatan Lyra tentangmu sudah dihapus.")
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute("DELETE FROM conversation_history WHERE uid=$1", str(ctx.author.id))
+            await conn.execute("DELETE FROM memory_summaries WHERE uid=$1", str(ctx.author.id))
+        await ctx.send("Ingatan Lyra tentangmu sudah dihapus.")
+    except Exception as e:
+        print(f"[RESET ERROR] {e}")
+        await ctx.send("Gagal menghapus ingatan. Coba lagi nanti.")
+
+# =========
+# Cleanup on shutdown
+
+@bot.event
+async def on_close():
+    await close_pool()
+    print("[DB] Connection pool closed")
 
 # =========
 # Run
@@ -220,10 +263,3 @@ if __name__ == "__main__":
         raise RuntimeError("DISCORD_TOKEN tidak ditemukan")
 
     bot.run(DISCORD_TOKEN)
-
-
-
-
-
-
-
