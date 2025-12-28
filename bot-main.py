@@ -210,7 +210,7 @@ async def on_message(message):
 async def reset(ctx):
     pool = await get_pool()
     async with pool.acquire() as conn:
-        await conn.execute("DELETE FROM conversation_history WHERE user_id=$1", str(ctx.author.id))
+        await conn.execute("DELETE FROM conversation_history WHERE uid=$1", str(ctx.author.id))
     await ctx.send("Ingatan Lyra tentangmu sudah dihapus.")
 
 # =========
@@ -221,6 +221,7 @@ if __name__ == "__main__":
         raise RuntimeError("DISCORD_TOKEN tidak ditemukan")
 
     bot.run(DISCORD_TOKEN)
+
 
 
 
