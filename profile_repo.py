@@ -6,7 +6,7 @@ async def get_profile(uid: str):
         pool = await get_pool()
         async with pool.acquire() as conn:
             return await conn.fetchrow(
-                "select summary, last_updated from user_profiles where uid=$1",
+                "select summary, last_updated from user_profiles where user_id=$1",
                 uid
             )
     except Exception as e:
@@ -20,9 +20,9 @@ async def save_profile(uid: str, summary: str):
         async with pool.acquire() as conn:
             await conn.execute(
                 """
-                insert into user_profiles (uid, summary, last_updated)
+                insert into user_profiles (user_id, summary, last_updated)
                 values ($1, $2, now())
-                on conflict (uid)
+                on conflict (user_id)
                 do update set
                     summary = excluded.summary,
                     last_updated = excluded.last_updated
@@ -32,4 +32,3 @@ async def save_profile(uid: str, summary: str):
             )
     except Exception as e:
         print("[DB WARN] save_profile failed:", e)
-
