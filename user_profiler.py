@@ -5,7 +5,7 @@ import google.generativeai as genai
 from datetime import datetime, timedelta
 from config import MODEL_NAME, SYSTEM_PROMPT_SUMMARIZER, LOGS_DIR # Impor path folder logs
 
-def read_logs_sync(log_files, user_id):
+def read_logs_sync(log_files, uid):
     user_interactions = []
     for log_file in log_files:
         try:
@@ -13,7 +13,7 @@ def read_logs_sync(log_files, user_id):
                 for line in f:
                     try:
                         log_data = json.loads(line)
-                        if str(log_data.get("user_id")) == user_id:
+                        if str(log_data.get("uid")) == uid:
                             user_interactions.append(f"Q: {log_data['question']} | A: {log_data['answer']}")
                     except json.JSONDecodeError:
                         continue
@@ -34,12 +34,12 @@ def get_log_filenames_for_past_days(days: int) -> list:
     return filenames
 
 # define function untuk membuat user profile
-async def create_user_profile(user_id: str, user_name: str) -> str:
-    print(f"[Profiler] Memulai pembuatan profil untuk pengguna: {user_name} ({user_id})")
+async def create_user_profile(uid: str, user_name: str) -> str:
+    print(f"[Profiler] Memulai pembuatan profil untuk pengguna: {user_name} ({uid})")
 
     log_files = get_log_filenames_for_past_days(7)
     loop = asyncio.get_running_loop()
-    user_interactions = await loop.run_in_executor(None, read_logs_sync, log_files, user_id)
+    user_interactions = await loop.run_in_executor(None, read_logs_sync, log_files, uid)
 
     if len(user_interactions) < 10:
         return "Belum ada riwayat percakapan yang signifikan."
@@ -54,3 +54,4 @@ async def create_user_profile(user_id: str, user_name: str) -> str:
     except Exception as e:
         print(f"[ERROR] Gagal saat meringkas profil pengguna: {e}")
         return "Gagal membuat profil pengguna."
+
