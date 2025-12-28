@@ -10,7 +10,7 @@ def get_todays_log_file():
     return os.path.join(LOGS_DIR, f"interaction_log_{today_str}.jsonl")
 
 # catat interaksi ke log harian
-def log_interaction(user_id, user_name, question, answer):
+def log_interaction(uid, user_name, question, answer):
     # make sure folder 'data/logs' ada
     os.makedirs(LOGS_DIR, exist_ok=True)
 
@@ -18,7 +18,7 @@ def log_interaction(user_id, user_name, question, answer):
 
     log_entry = {
         "timestamp": datetime.now().isoformat(),
-        "user_id": user_id,
+        "uid": uid,
         "user_name": user_name,
         "question": question,
         "answer": answer
@@ -27,4 +27,5 @@ def log_interaction(user_id, user_name, question, answer):
         with open(log_file_name, "a", encoding="utf-8") as f:
             f.write(json.dumps(log_entry) + "\n")
     except Exception as e:
+
         print(f"[ERROR] Gagal menulis ke file log '{log_file_name}': {e}")
