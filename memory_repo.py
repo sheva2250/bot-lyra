@@ -80,3 +80,27 @@ async def trim_history_if_needed(uid: str):
     except Exception as e:
         print("[DB WARN] trim_history failed:", e)
 
+
+async def delete_old_history(uid: str, keep_last: int):
+    """
+    Delete old history, keeping only the most recent messages
+    """
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                delete from conversation_history
+                where id not in (
+                    select id from conversation_history
+                    where uid = $1
+                    order by created_at desc
+                    limit $2
+                )
+                and uid = $1
+                """,
+                uid,
+                keep_last
+            )
+    except Exception as e:
+        print("[DB WARN] delete_old_history failed:", e)
