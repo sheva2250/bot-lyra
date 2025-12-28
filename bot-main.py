@@ -4,7 +4,6 @@ import discord
 import google.generativeai as genai
 import asyncio
 import textwrap
-import collections
 import os
 
 from google.api_core import exceptions as google_exceptions
@@ -192,19 +191,19 @@ async def on_message(message):
                     generation_config=generation_config
                 ).start_chat(history=user_history)
 
-                response, chat_session = await key_rotation(chat_session, user_question, active_system_prompt)
+                result = await key_rotation(chat_session, user_question, active_system_prompt)
 
-                # --- FIX: Safety Filter Handling ---
-                if response is None:
+                if result is None:
                     ai_answer = "Aduh, Ly lagi pusing (API Error/Limit)."
+                    response = None
                 else:
-                    # Cek apakah response diblokir oleh Safety Filter
+                    response, chat_session = result
                     try:
                         ai_answer = response.text
                     except ValueError:
-                        # Jika response.text error, berarti kena filter
                         print(f"[BLOCKED] Feedback: {response.prompt_feedback}")
                         ai_answer = "Maaf, Ly gabisa jawab itu karena melanggar safety guidelines Google >.<"
+
 
                 # Log & Save
                 log_interaction(user_id_str, user_name, user_question, ai_answer)
@@ -216,6 +215,8 @@ async def on_message(message):
                         for msg in chat_session.history
                     ]
                     conversation_histories[user_id_str] = serializable_history
+                    while len(conversation_histories[user_id_str]) > MAX_HISTORY:
+                        del conversation_histories[user_id_str][:2]
 
                 # --- Split Message Logic ---
                 def sanitize_mass_mentions(text: str) -> str:
@@ -276,3 +277,4 @@ if __name__ == "__main__":
             save_data(user_profiles_cache, PROFILES_FILE)
 
             print("[System] Data tersimpan. Bye bye!")
+
