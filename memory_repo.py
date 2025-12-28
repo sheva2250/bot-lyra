@@ -12,7 +12,7 @@ async def load_history(uid: str):
                 """
                 select role, content
                 from conversation_history
-                where uid = $1
+                where user_id = $1
                 order by created_at asc
                 limit $2
                 """,
@@ -36,7 +36,7 @@ async def append_message(uid: str, role: str, content: str):
         async with pool.acquire() as conn:
             await conn.execute(
                 """
-                insert into conversation_history (uid, role, content)
+                insert into conversation_history (user_id, role, content)
                 values ($1, $2, $3)
                 """,
                 uid,
@@ -55,7 +55,7 @@ async def trim_history_if_needed(uid: str):
         pool = await get_pool()
         async with pool.acquire() as conn:
             count = await conn.fetchval(
-                "select count(*) from conversation_history where uid=$1",
+                "select count(*) from conversation_history where user_id=$1",
                 uid
             )
 
@@ -67,11 +67,11 @@ async def trim_history_if_needed(uid: str):
                 delete from conversation_history
                 where id not in (
                     select id from conversation_history
-                    where uid = $1
+                    where user_id = $1
                     order by created_at desc
                     limit $2
                 )
-                and uid = $1
+                and user_id = $1
                 """,
                 uid,
                 MAX_ROWS
@@ -93,11 +93,11 @@ async def delete_old_history(uid: str, keep_last: int):
                 delete from conversation_history
                 where id not in (
                     select id from conversation_history
-                    where uid = $1
+                    where user_id = $1
                     order by created_at desc
                     limit $2
                 )
-                and uid = $1
+                and user_id = $1
                 """,
                 uid,
                 keep_last
