@@ -99,7 +99,13 @@ async def key_rotation(user_question, history, system_prompt):
 # =========
 # Keep-alive server
 async def handle(request):
-    return web.Response(text="Lyra is alive.")
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute("SELECT 1")
+        return web.Response(text="Lyra is alive.")
+    except Exception as e:
+        return web.Response(text=f"DB Error: {e}", status=500)
 
 app = web.Application()
 app.router.add_get("/", handle)
@@ -294,3 +300,4 @@ async def on_close():
 if __name__ == "__main__":
     if not DISCORD_TOKEN: raise RuntimeError("DISCORD_TOKEN Missing")
     bot.run(DISCORD_TOKEN)
+
