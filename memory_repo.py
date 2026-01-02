@@ -1,34 +1,21 @@
-# memory_repo.py
+# memory_summary_repo.py
 from db import get_pool
 
-MAX_HISTORY = 10
 
-
-async def load_history(user_id: str):
+async def get_memory_summary(user_id: str):
     pool = await get_pool()
     if pool is None:
-        return []
+        return ""
 
     async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """
-            SELECT role, content
-            FROM conversation_history
-            WHERE user_id = $1
-            ORDER BY created_at ASC
-            LIMIT $2
-            """,
-            user_id,
-            MAX_HISTORY * 2
+        row = await conn.fetchrow(
+            "SELECT summary FROM memory_summaries WHERE user_id=$1",
+            user_id
         )
-
-    return [
-        {"role": r["role"], "content": r["content"]}
-        for r in rows
-    ]
+        return row["summary"] if row else ""
 
 
-async def append_message(user_id: str, role: str, content: str):
+async def save_memory_summary(user_id: str, summary: str):
     pool = await get_pool()
     if pool is None:
         return
@@ -36,32 +23,13 @@ async def append_message(user_id: str, role: str, content: str):
     async with pool.acquire() as conn:
         await conn.execute(
             """
-            INSERT INTO conversation_history (user_id, role, content)
-            VALUES ($1, $2, $3)
+            INSERT INTO memory_summaries (user_id, summary, updated_at)
+            VALUES ($1, $2, NOW())
+            ON CONFLICT (user_id)
+            DO UPDATE SET
+              summary = EXCLUDED.summary,
+              updated_at = EXCLUDED.updated_at
             """,
             user_id,
-            role,
-            content
-        )
-
-
-async def delete_old_history(user_id: str, keep_last: int):
-    pool = await get_pool()
-    if pool is None:
-        return
-
-    async with pool.acquire() as conn:
-        await conn.execute(
-            """
-            DELETE FROM conversation_history
-            WHERE user_id = $1
-              AND id NOT IN (
-                SELECT id FROM conversation_history
-                WHERE user_id = $1
-                ORDER BY created_at DESC
-                LIMIT $2
-              )
-            """,
-            user_id,
-            keep_last
+            summary
         )
