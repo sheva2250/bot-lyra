@@ -262,21 +262,17 @@ async def on_message(message):
 # Commands
 @bot.command()
 async def reset(ctx):
-    try:
-        pool = await get_pool()
-        uid = str(ctx.author.id)
+    uid = str(ctx.author.id)
+    local_profile_cache.pop(uid, None)
+    local_memory_cache.pop(uid, None)
 
-        local_profile_cache.pop(uid, None)
-        local_memory_cache.pop(uid, None)
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("DELETE FROM conversation_history WHERE user_id=$1", uid)
+        await conn.execute("DELETE FROM memory_summaries WHERE user_id=$1", uid)
+        await conn.execute("DELETE FROM user_profiles WHERE user_id=$1", uid)
 
-        async with pool.acquire() as conn:
-            await conn.execute("DELETE FROM conversation_history WHERE user_id=$1", uid)
-            await conn.execute("DELETE FROM memory_summaries WHERE user_id=$1", uid)
-            await conn.execute("DELETE FROM user_profiles WHERE user_id=$1", uid)
-
-        await ctx.send("Ingatan Lyra tentangmu sudah dihapus.")
-    except Exception:
-        await ctx.send("Gagal.")
+    await ctx.send("Ingatan Lyra tentangmu sudah dihapus.")
 
 @bot.command()
 async def info(ctx):
@@ -299,3 +295,4 @@ if __name__ == "__main__":
     if not DISCORD_TOKEN:
         raise RuntimeError("DISCORD_TOKEN Missing")
     bot.run(DISCORD_TOKEN)
+
