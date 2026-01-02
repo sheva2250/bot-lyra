@@ -1,4 +1,3 @@
-# memory_repo.py
 from db import get_pool
 
 MAX_HISTORY = 10
@@ -22,7 +21,7 @@ async def load_history(uid: str):
         rows_reversed = list(reversed(rows))
 
         return [
-            {"role": r["role"], "parts": [{"text": r["content"]}]}
+            {"role": r["role"], "content": r["content"]}
             for r in rows_reversed
         ]
 
@@ -50,7 +49,7 @@ async def append_message(uid: str, role: str, content: str):
 
 async def trim_history_if_needed(uid: str):
     """
-    Trim HANYA jika jumlah row > MAX_ROWS
+    trim if jumlah row > MAX_ROWS
     """
     try:
         pool = await get_pool()
