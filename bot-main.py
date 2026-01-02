@@ -1,5 +1,3 @@
-# bot-main.py
-# ==========
 import discord
 import asyncio
 import os
@@ -36,18 +34,18 @@ KEEP_RECENT = 10
 
 user_cooldowns = {}
 
-# RAM CACHE
+# RAM cache
 local_profile_cache = {}
 local_memory_cache = {}
 
 # =========
-# DISCORD CLIENT
+# discord client
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # =========
-# Keep-alive server (Render free-tier)
+# keep alive server
 async def handle(request):
     try:
         pool = await get_pool()
@@ -299,3 +297,4 @@ if __name__ == "__main__":
     if not DISCORD_TOKEN:
         raise RuntimeError("DISCORD_TOKEN Missing")
     bot.run(DISCORD_TOKEN)
+
