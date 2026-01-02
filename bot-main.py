@@ -19,7 +19,7 @@ from user_profiler import create_user_profile
 from bot_log import log_interaction
 from memory_repo import load_history, append_message, delete_old_history
 from profile_repo import get_profile, save_profile
-from db import get_pool, init_pool, close_pool
+from db import get_pool
 from memory_summarizer import summarize_history
 from memory_summary_repo import save_memory_summary, get_memory_summary
 
@@ -368,3 +368,4 @@ if __name__ == "__main__":
     if not DISCORD_TOKEN:
         raise RuntimeError("DISCORD_TOKEN Missing")
     bot.run(DISCORD_TOKEN)
+
