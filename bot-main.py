@@ -1,3 +1,4 @@
+# ==========
 import discord
 import asyncio
 import os
@@ -34,18 +35,18 @@ KEEP_RECENT = 10
 
 user_cooldowns = {}
 
-# RAM cache
+# RAM CACHE
 local_profile_cache = {}
 local_memory_cache = {}
 
 # =========
-# discord client
+# DISCORD CLIENT
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # =========
-# keep alive server
+# Keep-alive server (Render free-tier)
 async def handle(request):
     try:
         pool = await get_pool()
@@ -108,7 +109,7 @@ async def on_message(message):
         )
         return
 
-    # Cooldown (non-master)
+    # Cooldown (non-master) with cleanup
     uid = str(message.author.id)
     now = datetime.now()
 
@@ -116,6 +117,11 @@ async def on_message(message):
         if uid in user_cooldowns and (now - user_cooldowns[uid]).total_seconds() < COOLDOWN:
             return
         user_cooldowns[uid] = now
+        
+        # Cleanup old cooldowns
+        if len(user_cooldowns) > 1000:
+            cutoff = now - timedelta(minutes=5)
+            user_cooldowns = {k: v for k, v in user_cooldowns.items() if v > cutoff}
 
     # Clean content
     content = message.content
@@ -164,7 +170,7 @@ async def on_message(message):
     if message.author.id == MASTER_ID:
         system_prompt += "\n\n" + SYSTEM_PROMPT_MASTER
 
-    if user_summary:
+    if user_summary and "Belum ada" not in user_summary:
         system_prompt += f"\n\n# Info User:\n{user_summary}"
 
     # ============================
@@ -213,7 +219,7 @@ async def on_message(message):
         history = history[-KEEP_RECENT:]
 
     # ============================
-    # CALL GROK
+    # CALL GROK (NOW ASYNC)
     # ============================
     async with message.channel.typing():
         try:
@@ -221,7 +227,7 @@ async def on_message(message):
             messages.extend(history)
             messages.append({"role": "user", "content": user_question})
 
-            ai_answer = grok_chat(
+            ai_answer = await grok_chat(
                 messages,
                 temperature=0.5,
                 max_tokens=120
@@ -297,4 +303,3 @@ if __name__ == "__main__":
     if not DISCORD_TOKEN:
         raise RuntimeError("DISCORD_TOKEN Missing")
     bot.run(DISCORD_TOKEN)
-
