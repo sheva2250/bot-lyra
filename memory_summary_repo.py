@@ -1,12 +1,12 @@
 from db import get_pool
 
-async def get_memory_summary(uid: str):
+async def get_memory_summary(user_id: str):
     try:
         pool = await get_pool()
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
                 "select summary from memory_summaries where user_id=$1",
-                uid
+                user_id
             )
             return row["summary"] if row else ""
     except Exception as e:
@@ -14,7 +14,7 @@ async def get_memory_summary(uid: str):
         return ""
 
 
-async def save_memory_summary(uid: str, summary: str):
+async def save_memory_summary(user_id: str, summary: str):
     try:
         pool = await get_pool()
         async with pool.acquire() as conn:
@@ -24,10 +24,10 @@ async def save_memory_summary(uid: str, summary: str):
                 values ($1, $2, now())
                 on conflict (user_id)
                 do update set
-                  summary = excluded.summary,
-                  updated_at = excluded.updated_at
+                    summary = excluded.summary,
+                    updated_at = excluded.updated_at
                 """,
-                uid,
+                user_id,
                 summary
             )
     except Exception as e:
