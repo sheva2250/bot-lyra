@@ -10,50 +10,49 @@ _pool = None
 
 
 async def init_pool():
-    """
-    Initialize asyncpg pool safely.
-    Return None if connection fails (fail-soft).
-    """
+    """Initialize the connection pool on startup"""
     global _pool
+    if _pool is None:
+        try:
+            _pool = await asyncpg.create_pool(
+                DATABASE_URL,
+                min_size=1,
+                max_size=20,
 
-    if _pool is not None and not _pool._closed:
-        return _pool
+                timeout=10,
+                command_timeout=10,
 
-    try:
-        _pool = await asyncpg.create_pool(
-            DATABASE_URL,
-            min_size=1,
-            max_size=5,
+                # CONN LIFETIME
+                max_inactive_connection_lifetime=300,
 
-            # PgBouncer compatibility
-            statement_cache_size=0,
+                statement_cache_size=0,
+                # SSL
+                ssl="require",
 
-            # Timeouts
-            command_timeout=15,
-            timeout=15,
-
-            # SSL (Supabase)
-            ssl="require",
-        )
-        print("[DB] Pool initialized")
-        return _pool
-
-    except Exception as e:
-        print("[DB ERROR] init_pool failed:", e)
-        _pool = None
-        return None
-
+                # TCP Keepalives (Biar koneksi gak diputus diem-diem sama firewall)
+                server_settings={
+                    "application_name": "LyraBot",
+                    # Paksa kirim sinyal 'ping' TCP tiap 10 detik
+                    "tcp_keepalives_idle": "10",
+                    "tcp_keepalives_interval": "5",
+                    "tcp_keepalives_count": "3"
+                }
+            )
+            print("[DB] Pool created successfully with aggressive timeouts.")
+        except Exception as e:
+            print(f"[DB CRITICAL ERROR] Gagal connect ke Supabase: {e}")
+            # Biarkan _pool None, nanti error akan ditangkap di bot-main.py
+    return _pool
 
 async def get_pool():
     global _pool
     if _pool is None or _pool._closed:
-        return await init_pool()
+        _pool = await init_pool()
     return _pool
 
-
 async def close_pool():
+    """Close the connection pool gracefully"""
     global _pool
     if _pool is not None:
         await _pool.close()
         _pool = None
-        print("[DB] Pool closed")
