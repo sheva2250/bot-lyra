@@ -1,5 +1,5 @@
 import os
-import aiohttp
+import requests
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -12,7 +12,7 @@ MODEL = os.getenv("GROK_MODEL", "grok-4-1-fast-non-reasoning")
 API_URL = "https://api.x.ai/v1/chat/completions"
 
 
-async def grok_chat(messages, temperature=0.5, max_tokens=120):
+def grok_chat(messages, temperature=0.5, max_tokens=120):
     headers = {
         "Authorization": f"Bearer {XAI_API_KEY}",
         "Content-Type": "application/json",
@@ -25,15 +25,15 @@ async def grok_chat(messages, temperature=0.5, max_tokens=120):
         "max_tokens": max_tokens,
     }
 
-    timeout = aiohttp.ClientTimeout(total=30)
-    
-    async with aiohttp.ClientSession(timeout=timeout) as session:
-        async with session.post(API_URL, headers=headers, json=payload) as res:
-            if res.status != 200:
-                text = await res.text()
-                print(f"[API ERROR] Status: {res.status}")
-                print(f"[API ERROR] Response: {text}")
-                raise aiohttp.ClientError(f"API request failed with status {res.status}")
-            
-            data = await res.json()
-            return data["choices"][0]["message"]["content"]
+    res = requests.post(API_URL, headers=headers, json=payload, timeout=30)
+
+    # better error logging
+    if res.status_code != 200:
+        print(f"[API ERROR] Status: {res.status_code}")
+        print(f"[API ERROR] Response: {res.text}")
+
+    res.raise_for_status()
+
+    data = res.json()
+
+    return data["choices"][0]["message"]["content"]
