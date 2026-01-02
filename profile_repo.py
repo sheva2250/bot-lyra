@@ -1,19 +1,23 @@
 from db import get_pool
 
-async def get_profile(uid: str):
+async def get_profile(user_id: str):
     try:
         pool = await get_pool()
         async with pool.acquire() as conn:
             return await conn.fetchrow(
-                "select summary, last_updated from user_profiles where user_id=$1",
-                uid
+                """
+                select summary, last_updated
+                from user_profiles
+                where user_id = $1
+                """,
+                user_id
             )
     except Exception as e:
         print("[DB WARN] get_profile failed:", e)
         return None
 
 
-async def save_profile(uid: str, summary: str):
+async def save_profile(user_id: str, summary: str):
     try:
         pool = await get_pool()
         async with pool.acquire() as conn:
@@ -26,7 +30,7 @@ async def save_profile(uid: str, summary: str):
                     summary = excluded.summary,
                     last_updated = excluded.last_updated
                 """,
-                uid,
+                user_id,
                 summary
             )
     except Exception as e:
