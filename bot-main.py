@@ -39,6 +39,9 @@ user_cooldowns = {}
 local_profile_cache = {}
 local_memory_cache = {}
 
+# DB Status Flag
+db_initialized = False
+
 # =========
 # DISCORD CLIENT
 intents = discord.Intents.default()
@@ -48,11 +51,18 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # =========
 # Keep-alive server (Render free-tier)
 async def handle(request):
+    global db_initialized
+    if not db_initialized:
+        return web.Response(text="Bot is starting, database not ready yet...", status=503)
+    
     try:
         pool = await get_pool()
+        if pool is None:
+            return web.Response(text="Database pool is None", status=500)
+            
         async with pool.acquire() as conn:
             await conn.execute("SELECT 1")
-        return web.Response(text="Lyra is alive.")
+        return web.Response(text="Lyra is alive and database is connected.")
     except Exception as e:
         return web.Response(text=f"DB Error: {e}", status=500)
 
@@ -71,20 +81,35 @@ Thread(target=run_server, daemon=True).start()
 # Events
 @bot.event
 async def on_ready():
+    global db_initialized
+    
+    print("-" * 50)
+    print(f"Bot logged in as: {bot.user}")
+    print("-" * 50)
+    
     try:
-        await init_pool()
-        print("[DB] Connection pool initialized")
+        print("[DB] Initializing database connection...")
+        pool = await init_pool()
+        if pool is None:
+            print("[DB ERROR] Failed to initialize pool - pool is None")
+            print("[DB ERROR] Bot will continue but database features will not work")
+        else:
+            db_initialized = True
+            print("[DB] ✓ Connection pool initialized successfully")
     except Exception as e:
         print(f"[DB ERROR] Failed to initialize pool: {e}")
+        print("[DB ERROR] Bot will continue but database features will not work")
 
     print("-" * 50)
-    print(f"Bot online: {bot.user}")
     print(f"Model: {MODEL_NAME}")
+    print(f"Database Status: {'✓ Connected' if db_initialized else '✗ Failed'}")
     print("-" * 50)
 
 
 @bot.event
 async def on_message(message):
+    global db_initialized
+    
     if message.author.bot or message.author == bot.user:
         return
     if message.author.id in BANNED_USERS:
@@ -105,6 +130,14 @@ async def on_message(message):
     if raw in greeting_set:
         await message.reply(
             "Halo, nama ku Lyra! kamu bisa panggil aku Ly loh biar keliatan akrab hehe :p",
+            mention_author=False
+        )
+        return
+
+    # Check DB status
+    if not db_initialized:
+        await message.reply(
+            "Maaf, Ly masih dalam proses startup. Database belum siap (｡•́︿•̀｡)",
             mention_author=False
         )
         return
@@ -150,8 +183,8 @@ async def on_message(message):
             if row and now - row["last_updated"] < timedelta(hours=PROFILE_TTL_HOURS):
                 user_summary = row["summary"]
                 local_profile_cache[uid] = {"summary": user_summary, "time": now}
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[PROFILE ERROR] {e}")
 
     if not user_summary:
         try:
@@ -160,8 +193,8 @@ async def on_message(message):
             local_profile_cache[uid] = {"summary": summary, "time": now}
             if summary and "Belum ada" not in summary:
                 asyncio.create_task(save_profile(uid, summary))
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[PROFILE GEN ERROR] {e}")
 
     # ============================
     # SYSTEM PROMPT BUILD
@@ -187,8 +220,8 @@ async def on_message(message):
             memory_summary = await get_memory_summary(uid)
             if memory_summary:
                 local_memory_cache[uid] = {"data": memory_summary, "time": now}
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[MEMORY SUMMARY ERROR] {e}")
 
     if memory_summary:
         system_prompt += f"\n\n# Ringkasan Percakapan Sebelumnya:\n{memory_summary}"
@@ -266,8 +299,18 @@ async def on_message(message):
 # Commands
 @bot.command()
 async def reset(ctx):
+    global db_initialized
+    
+    if not db_initialized:
+        await ctx.send("Database belum siap, coba lagi nanti.")
+        return
+        
     try:
         pool = await get_pool()
+        if pool is None:
+            await ctx.send("Database tidak tersedia.")
+            return
+            
         uid = str(ctx.author.id)
 
         local_profile_cache.pop(uid, None)
@@ -279,8 +322,9 @@ async def reset(ctx):
             await conn.execute("DELETE FROM user_profiles WHERE user_id=$1", uid)
 
         await ctx.send("Ingatan Lyra tentangmu sudah dihapus.")
-    except Exception:
-        await ctx.send("Gagal.")
+    except Exception as e:
+        print(f"[RESET ERROR] {e}")
+        await ctx.send("Gagal menghapus data.")
 
 @bot.command()
 async def info(ctx):
@@ -293,6 +337,27 @@ async def info(ctx):
 Lyra akan mengingat percakapanmu dan belajar tentang preferensimu!
     """
     await ctx.send(help_text)
+
+@bot.command()
+async def dbstatus(ctx):
+    """Check database connection status"""
+    global db_initialized
+    
+    if not db_initialized:
+        await ctx.send("Database belum diinisialisasi")
+        return
+    
+    try:
+        pool = await get_pool()
+        if pool is None:
+            await ctx.send("Database pool is None")
+            return
+            
+        async with pool.acquire() as conn:
+            result = await conn.fetchval("SELECT 1")
+            await ctx.send(f"Database connected! Test query result: {result}")
+    except Exception as e:
+        await ctx.send(f"❌ Database error: {e}")
 
 @bot.event
 async def on_close():
