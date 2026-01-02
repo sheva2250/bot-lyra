@@ -1,4 +1,3 @@
-# profile_repo.py
 from db import get_pool
 
 async def get_profile(uid: str):
