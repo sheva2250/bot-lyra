@@ -27,7 +27,7 @@ def grok_chat(messages, temperature=0.5, max_tokens=120):
 
     res = requests.post(API_URL, headers=headers, json=payload, timeout=30)
 
-    # better error logging
+    # Add better error logging
     if res.status_code != 200:
         print(f"[API ERROR] Status: {res.status_code}")
         print(f"[API ERROR] Response: {res.text}")
@@ -35,5 +35,4 @@ def grok_chat(messages, temperature=0.5, max_tokens=120):
     res.raise_for_status()
 
     data = res.json()
-
     return data["choices"][0]["message"]["content"]
