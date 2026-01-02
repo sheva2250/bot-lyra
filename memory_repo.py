@@ -1,28 +1,26 @@
 from db import get_pool
 
 MAX_HISTORY = 10
-MAX_ROWS = MAX_HISTORY * 2
 
-async def load_history(uid: str):
+async def load_history(user_id: str):
     try:
         pool = await get_pool()
         async with pool.acquire() as conn:
             rows = await conn.fetch(
                 """
-                SELECT role, content
-                FROM conversation_history
-                WHERE user_id = $1
-                ORDER BY created_at DESC
-                LIMIT $2
+                select role, content
+                from conversation_history
+                where user_id = $1
+                order by created_at asc
+                limit $2
                 """,
-                uid,
-                MAX_ROWS
+                user_id,
+                MAX_HISTORY * 2
             )
-        rows_reversed = list(reversed(rows))
 
         return [
-            {"role": r["role"], "content": r["content"]}
-            for r in rows_reversed
+            {"role": r["role"], "parts": [{"text": r["content"]}]}
+            for r in rows
         ]
 
     except Exception as e:
@@ -30,16 +28,16 @@ async def load_history(uid: str):
         return []
 
 
-async def append_message(uid: str, role: str, content: str):
+async def append_message(user_id: str, role: str, content: str):
     try:
         pool = await get_pool()
         async with pool.acquire() as conn:
             await conn.execute(
                 """
-                INSERT INTO conversation_history (user_id, role, content)
-                VALUES ($1, $2, $3)
+                insert into conversation_history (user_id, role, content)
+                values ($1, $2, $3)
                 """,
-                uid,
+                user_id,
                 role,
                 content
             )
@@ -47,57 +45,23 @@ async def append_message(uid: str, role: str, content: str):
         print("[DB WARN] append_message failed:", e)
 
 
-async def trim_history_if_needed(uid: str):
-    """
-    trim if jumlah row > MAX_ROWS
-    """
+async def trim_history(user_id: str):
     try:
         pool = await get_pool()
         async with pool.acquire() as conn:
-            count = await conn.fetchval(
-                "SELECT count(*) FROM conversation_history WHERE user_id=$1",
-                uid
-            )
-
-            if count <= MAX_ROWS:
-                return
-
             await conn.execute(
                 """
-                DELETE FROM conversation_history
-                WHERE id NOT IN (
-                    SELECT id FROM conversation_history
-                    WHERE user_id = $1
-                    ORDER BY created_at DESC
-                    LIMIT $2
+                delete from conversation_history
+                where id not in (
+                    select id from conversation_history
+                    where user_id = $1
+                    order by created_at desc
+                    limit $2
                 )
-                AND user_id = $1
+                and user_id = $1
                 """,
-                uid,
-                MAX_ROWS
+                user_id,
+                MAX_HISTORY * 2
             )
-
     except Exception as e:
         print("[DB WARN] trim_history failed:", e)
-
-
-async def delete_old_history(uid: str, keep_last: int):
-    try:
-        pool = await get_pool()
-        async with pool.acquire() as conn:
-            await conn.execute(
-                """
-                DELETE FROM conversation_history
-                WHERE id NOT IN (
-                    SELECT id FROM conversation_history
-                    WHERE user_id = $1
-                    ORDER BY created_at DESC
-                    LIMIT $2
-                )
-                AND user_id = $1
-                """,
-                uid,
-                keep_last
-            )
-    except Exception as e:
-        print("[DB WARN] delete_old_history failed:", e)
