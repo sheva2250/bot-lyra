@@ -61,7 +61,7 @@ app.router.add_get("/", handle)
 
 
 def run_server():
-    web.run_app(app, port=int(os.environ.get("PORT", 8080)), handle_signals=False)
+    web.run_app(app, port=int(os.environ.get("PORT")), handle_signals=False)
 
 
 Thread(target=run_server, daemon=True).start()
@@ -297,3 +297,4 @@ if __name__ == "__main__":
     if not DISCORD_TOKEN:
         raise RuntimeError("DISCORD_TOKEN Missing")
     bot.run(DISCORD_TOKEN)
+
