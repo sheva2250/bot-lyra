@@ -24,4 +24,4 @@ async def summarize_history(history: list) -> str:
         {"role": "user", "content": text},
     ]
 
-    return grok_chat(messages, temperature=0.3, max_tokens=150)
+    return await grok_chat(messages, temperature=0.3, max_tokens=150)
