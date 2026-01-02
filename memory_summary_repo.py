@@ -1,4 +1,3 @@
-# memory_summary_repo.py
 from db import get_pool
 
 async def get_memory_summary(uid: str):
