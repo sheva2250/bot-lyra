@@ -59,7 +59,7 @@ async def create_user_profile(uid: str, user_name: str) -> str:
     if len(interactions) < 10:
         return "Belum ada riwayat percakapan yang signifikan."
 
-    # limit biar token aman
+    # Batasi supaya token aman
     history_text = "\n\n".join(interactions[-30:])
 
     prompt = (
