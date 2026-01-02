@@ -31,6 +31,7 @@ COOLDOWN = 4
 PROFILE_TTL_HOURS = 6
 SUMMARY_TRIGGER = 20
 KEEP_RECENT = 10
+db_ready = False
 
 user_cooldowns = {}
 
@@ -49,19 +50,21 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 async def handle(request):
     try:
         pool = await get_pool()
+        if pool is None:
+            return web.Response(text="DB not ready", status=503)
+
         async with pool.acquire() as conn:
             await conn.execute("SELECT 1")
         return web.Response(text="Lyra is alive.")
     except Exception as e:
         return web.Response(text=f"DB Error: {e}", status=500)
 
-
 app = web.Application()
 app.router.add_get("/", handle)
 
 
 def run_server():
-    web.run_app(app, port=int(os.environ.get("PORT")), handle_signals=False)
+    web.run_app(app, port=int(os.environ.get("PORT", 8080)), handle_signals=False)
 
 
 Thread(target=run_server, daemon=True).start()
@@ -70,20 +73,24 @@ Thread(target=run_server, daemon=True).start()
 # Events
 @bot.event
 async def on_ready():
-    try:
-        await init_pool()
-        print("[DB] Connection pool initialized")
-    except Exception as e:
-        print(f"[DB ERROR] Failed to initialize pool: {e}")
+    global db_ready
+    pool = await init_pool()
+    db_ready = pool is not None
 
-    print("-" * 50)
-    print(f"Bot online: {bot.user}")
-    print(f"Model: {MODEL_NAME}")
-    print("-" * 50)
-
+    print(f"[DB] Ready = {db_ready}")
+    print(f"Bot logged in as {bot.user}")
 
 @bot.event
 async def on_message(message):
+    global db_ready
+
+    if not db_ready:
+        await message.reply(
+            "Ly masih bangun dulu ya, database belum siap.",
+            mention_author=False
+        )
+        return
+
     if message.author.bot or message.author == bot.user:
         return
     if message.author.id in BANNED_USERS:
@@ -221,7 +228,7 @@ async def on_message(message):
             messages.extend(history)
             messages.append({"role": "user", "content": user_question})
 
-            ai_answer = grok_chat(
+            ai_answer = await grok_chat(
                 messages,
                 temperature=0.5,
                 max_tokens=120
@@ -288,8 +295,7 @@ Lyra akan mengingat percakapanmu dan belajar tentang preferensimu!
     """
     await ctx.send(help_text)
 
-@bot.event
-async def on_close():
+async def shutdown():
     await close_pool()
     print("[DB] Connection pool closed")
 
@@ -297,4 +303,3 @@ if __name__ == "__main__":
     if not DISCORD_TOKEN:
         raise RuntimeError("DISCORD_TOKEN Missing")
     bot.run(DISCORD_TOKEN)
-
