@@ -44,6 +44,23 @@ async def append_message(user_id: str, role: str, content: str):
     except Exception as e:
         print("[DB WARN] append_message failed:", e)
 
+async def delete_old_history(user_id: str, keep_last: int):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            delete from conversation_history
+            where user_id = $1
+            and id not in (
+                select id from conversation_history
+                where user_id = $1
+                order by created_at desc
+                limit $2
+            )
+            """,
+            user_id,
+            keep_last
+        )
 
 async def trim_history(user_id: str):
     try:
@@ -65,3 +82,4 @@ async def trim_history(user_id: str):
             )
     except Exception as e:
         print("[DB WARN] trim_history failed:", e)
+
