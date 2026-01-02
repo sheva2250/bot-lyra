@@ -59,7 +59,7 @@ async def create_user_profile(uid: str, user_name: str) -> str:
     if len(interactions) < 10:
         return "Belum ada riwayat percakapan yang signifikan."
 
-    # limit biar token aman
+    # Batasi supaya token aman
     history_text = "\n\n".join(interactions[-30:])
 
     prompt = (
@@ -73,7 +73,7 @@ async def create_user_profile(uid: str, user_name: str) -> str:
             {"role": "user", "content": prompt},
         ]
 
-        summary = grok_chat(
+        summary = await grok_chat(
             messages,
             temperature=0.3,
             max_tokens=200
