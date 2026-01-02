@@ -15,11 +15,12 @@ from config import (
     DISCORD_TOKEN, MASTER_ID, BANNED_USERS,
     MODEL_NAME, SYSTEM_PROMPT, SYSTEM_PROMPT_MASTER
 )
+
+from db import get_pool
 from user_profiler import create_user_profile
 from bot_log import log_interaction
-from memory_repo import load_history, append_message, delete_old_history
+from memory_repo import load_history, append_message
 from profile_repo import get_profile, save_profile
-from db import get_pool
 from memory_summarizer import summarize_history
 from memory_summary_repo import save_memory_summary, get_memory_summary
 
@@ -81,30 +82,23 @@ Thread(target=run_server, daemon=True).start()
 # Events
 @bot.event
 async def on_ready():
+@bot.event
+async def on_ready():
     global db_initialized
-    
+
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute("SELECT 1")
+        db_initialized = True
+    except Exception as e:
+        print("[DB INIT FAILED]", e)
+        db_initialized = False
+
     print("-" * 50)
     print(f"Bot logged in as: {bot.user}")
+    print(f"Database Status: {'Connected' if db_initialized else 'Failed'}")
     print("-" * 50)
-    
-    try:
-        print("[DB] Initializing database connection...")
-        pool = await init_pool()
-        if pool is None:
-            print("[DB ERROR] Failed to initialize pool - pool is None")
-            print("[DB ERROR] Bot will continue but database features will not work")
-        else:
-            db_initialized = True
-            print("[DB] ✓ Connection pool initialized successfully")
-    except Exception as e:
-        print(f"[DB ERROR] Failed to initialize pool: {e}")
-        print("[DB ERROR] Bot will continue but database features will not work")
-
-    print("-" * 50)
-    print(f"Model: {MODEL_NAME}")
-    print(f"Database Status: {'✓ Connected' if db_initialized else '✗ Failed'}")
-    print("-" * 50)
-
 
 @bot.event
 async def on_message(message):
@@ -244,7 +238,6 @@ async def on_message(message):
                 summary = await summarize_history(old_part)
                 await save_memory_summary(uid, summary)
                 local_memory_cache[uid] = {"data": summary, "time": datetime.now()}
-                await delete_old_history(uid, keep_last=KEEP_RECENT)
             except Exception as e:
                 print("[BG SUMMARIZE ERROR]", e)
 
@@ -368,4 +361,5 @@ if __name__ == "__main__":
     if not DISCORD_TOKEN:
         raise RuntimeError("DISCORD_TOKEN Missing")
     bot.run(DISCORD_TOKEN)
+
 
