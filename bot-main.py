@@ -57,21 +57,17 @@ async def handle(request):
     except Exception as e:
         return web.Response(text=f"DB Error: {e}", status=500)
 
-
 app = web.Application()
 app.router.add_get("/", handle)
-
-
-def run_server():
-    web.run_app(app, port=int(os.environ.get("PORT", 8080)), handle_signals=False)
-
-
-Thread(target=run_server, daemon=True).start()
 
 # =========
 # Events
 @bot.event
 async def on_ready():
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", int(os.environ.get("PORT", 8080)))
+    await site.start()
     try:
         await init_pool()
         print("[DB] Connection pool initialized")
@@ -295,4 +291,5 @@ if __name__ == "__main__":
     if not DISCORD_TOKEN:
         raise RuntimeError("DISCORD_TOKEN Missing")
     bot.run(DISCORD_TOKEN)
+
 
