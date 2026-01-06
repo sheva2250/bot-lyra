@@ -3,6 +3,8 @@
 import discord
 import asyncio
 import os
+from discord.ext import tasks
+
 from datetime import datetime, timedelta
 from discord.ext import commands
 from aiohttp import web
@@ -49,19 +51,27 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # =========
 # Keep-alive server (Render free-tier)
 async def handle(request):
-    try:
-        pool = await get_pool()
-        async with pool.acquire() as conn:
-            await conn.execute("SELECT 1")
-        return web.Response(text="Lyra is alive.")
-    except Exception as e:
-        return web.Response(text=f"DB Error: {e}", status=500)
+    return web.Response(text="Lyra is awake.", status=200)
 
 app = web.Application()
 app.router.add_get("/", handle)
 
 # =========
 # Events
+@tasks.loop(minutes=5)
+async def keep_db_alive():
+    try:
+        pool = await get_pool()
+        if pool:
+            async with pool.acquire() as conn:
+                await conn.execute("SELECT 1")
+    except Exception as e:
+        print(f"[BG WARN] Gagal ping database: {e}")
+
+@keep_db_alive.before_loop
+async def before_db_alive():
+    await bot.wait_until_ready()
+
 @bot.event
 async def on_ready():
     runner = web.AppRunner(app)
@@ -73,6 +83,10 @@ async def on_ready():
         print("[DB] Connection pool initialized")
     except Exception as e:
         print(f"[DB ERROR] Failed to initialize pool: {e}")
+
+    if not keep_db_alive.is_running():
+        keep_db_alive.start()
+        print("[System] Background DB Warmer started!")
 
     print("-" * 50)
     print(f"Bot online: {bot.user}")
@@ -291,5 +305,6 @@ if __name__ == "__main__":
     if not DISCORD_TOKEN:
         raise RuntimeError("DISCORD_TOKEN Missing")
     bot.run(DISCORD_TOKEN)
+
 
 
