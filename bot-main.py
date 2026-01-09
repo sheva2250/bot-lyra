@@ -25,7 +25,7 @@ from profile_repo import get_profile, save_profile
 from db import get_pool, init_pool, close_pool
 from memory_summarizer import summarize_history
 from memory_summary_repo import save_memory_summary, get_memory_summary
-from db_queue import start_db_worker
+from db_queue import init_db_queue
 
 # =========
 # global config
@@ -310,6 +310,7 @@ if __name__ == "__main__":
     if not DISCORD_TOKEN:
         raise RuntimeError("DISCORD_TOKEN Missing")
     bot.run(DISCORD_TOKEN)
+
 
 
 
