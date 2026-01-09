@@ -1,5 +1,5 @@
-# memory_repo.py
 from db import get_pool
+from db_queue import enqueue
 
 MAX_HISTORY = 10
 MAX_ROWS = MAX_HISTORY * 2
@@ -19,12 +19,9 @@ async def load_history(uid: str):
                 uid,
                 MAX_ROWS
             )
-        rows_reversed = list(reversed(rows))
 
-        return [
-            {"role": r["role"], "content": r["content"]}
-            for r in rows_reversed
-        ]
+        rows.reverse()
+        return [{"role": r["role"], "content": r["content"]} for r in rows]
 
     except Exception as e:
         print("[DB WARN] load_history failed:", e)
@@ -32,26 +29,18 @@ async def load_history(uid: str):
 
 
 async def append_message(uid: str, role: str, content: str):
-    try:
-        pool = await get_pool()
-        async with pool.acquire() as conn:
-            await conn.execute(
-                """
-                INSERT INTO conversation_history (user_id, role, content)
-                VALUES ($1, $2, $3)
-                """,
-                uid,
-                role,
-                content
-            )
-    except Exception as e:
-        print("[DB WARN] append_message failed:", e)
+    await enqueue(
+        """
+        INSERT INTO conversation_history (user_id, role, content)
+        VALUES ($1, $2, $3)
+        """,
+        uid,
+        role,
+        content
+    )
 
 
 async def trim_history_if_needed(uid: str):
-    """
-    Trim HANYA jika jumlah row > MAX_ROWS
-    """
     try:
         pool = await get_pool()
         async with pool.acquire() as conn:
@@ -60,45 +49,40 @@ async def trim_history_if_needed(uid: str):
                 uid
             )
 
-            if count <= MAX_ROWS:
-                return
+        if count <= MAX_ROWS:
+            return
 
-            await conn.execute(
-                """
-                DELETE FROM conversation_history
-                WHERE id NOT IN (
-                    SELECT id FROM conversation_history
-                    WHERE user_id = $1
-                    ORDER BY created_at DESC
-                    LIMIT $2
-                )
-                AND user_id = $1
-                """,
-                uid,
-                MAX_ROWS
+        await enqueue(
+            """
+            DELETE FROM conversation_history
+            WHERE id NOT IN (
+                SELECT id FROM conversation_history
+                WHERE user_id = $1
+                ORDER BY created_at DESC
+                LIMIT $2
             )
+            AND user_id = $1
+            """,
+            uid,
+            MAX_ROWS
+        )
 
     except Exception as e:
         print("[DB WARN] trim_history failed:", e)
 
 
 async def delete_old_history(uid: str, keep_last: int):
-    try:
-        pool = await get_pool()
-        async with pool.acquire() as conn:
-            await conn.execute(
-                """
-                DELETE FROM conversation_history
-                WHERE id NOT IN (
-                    SELECT id FROM conversation_history
-                    WHERE user_id = $1
-                    ORDER BY created_at DESC
-                    LIMIT $2
-                )
-                AND user_id = $1
-                """,
-                uid,
-                keep_last
-            )
-    except Exception as e:
-        print("[DB WARN] delete_old_history failed:", e)
+    await enqueue(
+        """
+        DELETE FROM conversation_history
+        WHERE id NOT IN (
+            SELECT id FROM conversation_history
+            WHERE user_id = $1
+            ORDER BY created_at DESC
+            LIMIT $2
+        )
+        AND user_id = $1
+        """,
+        uid,
+        keep_last
+    )
