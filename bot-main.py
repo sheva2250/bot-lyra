@@ -76,8 +76,8 @@ async def before_db_alive():
 @bot.event
 async def on_ready():
     await init_pool()
-    await start_db_worker()
-    print("[SYSTEM] DB queue ready")
+    await init_db_queue()
+    print("[DB] Pool + Queue ready")
 
     runner = web.AppRunner(app)
     await runner.setup()
@@ -310,6 +310,7 @@ if __name__ == "__main__":
     if not DISCORD_TOKEN:
         raise RuntimeError("DISCORD_TOKEN Missing")
     bot.run(DISCORD_TOKEN)
+
 
 
 
