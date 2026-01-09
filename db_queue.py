@@ -1,36 +1,29 @@
 import asyncio
 from db import get_pool
 
-_db_queue: asyncio.Queue = asyncio.Queue()
-_worker_started = False
+_write_queue: asyncio.Queue | None = None
+_worker_task: asyncio.Task | None = None
 
-async def start_db_worker():
-    global _worker_started
-    if _worker_started:
-        return
-    _worker_started = True
-    asyncio.create_task(_db_worker())
-    print("[DB QUEUE] Worker started")
+async def init_db_queue():
+    global _write_queue, _worker_task
+    if _write_queue is None:
+        _write_queue = asyncio.Queue(maxsize=1000)
+        _worker_task = asyncio.create_task(_worker())
+        print("[DB QUEUE] Worker started")
 
-async def enqueue_db_write(query: str, *args):
-    await _db_queue.put((query, args))
+async def enqueue(sql: str, *args):
+    if _write_queue is None:
+        raise RuntimeError("DB queue not initialized")
+    await _write_queue.put((sql, args))
 
-async def _db_worker():
+async def _worker():
     while True:
-        query, args = await _db_queue.get()
+        sql, args = await _write_queue.get()
         try:
             pool = await get_pool()
-            if pool is None:
-                raise RuntimeError("DB pool not ready")
-
             async with pool.acquire() as conn:
-                await conn.execute(query, *args)
-
+                await conn.execute(sql, *args)
         except Exception as e:
             print("[DB QUEUE ERROR]", e)
-            # retry dengan delay ringan
-            await asyncio.sleep(2)
-            await _db_queue.put((query, args))
-
         finally:
-            _db_queue.task_done()
+            _write_queue.task_done()
