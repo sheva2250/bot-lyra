@@ -1,12 +1,9 @@
-# bot-main.py
 # ==========
 import discord
 import asyncio
 import os
-from discord.ext import tasks
-
 from datetime import datetime, timedelta
-from discord.ext import commands
+from discord.ext import commands, tasks
 from aiohttp import web
 from threading import Thread
 
@@ -25,7 +22,6 @@ from profile_repo import get_profile, save_profile
 from db import get_pool, init_pool, close_pool
 from memory_summarizer import summarize_history
 from memory_summary_repo import save_memory_summary, get_memory_summary
-from db_queue import init_db_queue
 
 # =========
 # global config
@@ -43,64 +39,106 @@ user_cooldowns = {}
 local_profile_cache = {}
 local_memory_cache = {}
 
-# =========
-# DISCORD CLIENT
-intents = discord.Intents.default()
-intents.message_content = True
-bot = commands.Bot(command_prefix="!", intents=intents)
+# DB Status Flag
+db_initialized = False
 
 # =========
-# Keep-alive server (Render free-tier)
+# DISCORD CLIENT WITH PROXY SUPPORT
+intents = discord.Intents.default()
+intents.message_content = True
+
+# Check for proxy in environment
+PROXY_URL = os.getenv("DISCORD_PROXY")
+if PROXY_URL:
+    print(f"[PROXY] Using proxy: {PROXY_URL}")
+    bot = commands.Bot(
+        command_prefix="!",
+        intents=intents,
+        proxy=PROXY_URL,
+        proxy_auth=None  # Add aiohttp.BasicAuth if proxy needs authentication
+    )
+else:
+    print("[PROXY] No proxy configured - using direct connection")
+    bot = commands.Bot(command_prefix="!", intents=intents)
+
+# =========
+# DATABASE KEEPALIVE
+# =========
+@tasks.loop(minutes=5)
+async def keep_db_warm():
+    global db_initialized
+    if not db_initialized:
+        return
+    try:
+        pool = await get_pool()
+        if pool and not pool._closed:
+            async with pool.acquire() as conn:
+                await conn.execute("SELECT 1")
+            print("[DB KEEPALIVE] ✓ Ping successful")
+    except Exception as e:
+        print(f"[DB KEEPALIVE] ✗ Ping failed: {e}")
+
+@keep_db_warm.before_loop
+async def before_keepalive():
+    await bot.wait_until_ready()
+    print("[DB KEEPALIVE] Starting keepalive task")
+
+# =========
+# Keep-alive server
 async def handle(request):
-    return web.Response(text="Lyra is awake.", status=200)
+    global db_initialized
+    if not db_initialized:
+        return web.Response(text="Bot is starting...", status=503)
+    try:
+        pool = await get_pool()
+        if pool is None:
+            return web.Response(text="Database pool is None", status=500)
+        async with pool.acquire() as conn:
+            await conn.execute("SELECT 1")
+        return web.Response(text="Lyra is alive and database is connected.")
+    except Exception as e:
+        return web.Response(text=f"DB Error: {e}", status=500)
 
 app = web.Application()
 app.router.add_get("/", handle)
 
+def run_server():
+    web.run_app(app, port=int(os.environ.get("PORT", 8080)), handle_signals=False)
+
+Thread(target=run_server, daemon=True).start()
+
 # =========
 # Events
-@tasks.loop(minutes=5)
-async def keep_db_alive():
-    try:
-        pool = await get_pool()
-        if pool:
-            async with pool.acquire() as conn:
-                await conn.execute("SELECT 1")
-    except Exception as e:
-        print(f"[BG WARN] Gagal ping database: {e}")
-
-@keep_db_alive.before_loop
-async def before_db_alive():
-    await bot.wait_until_ready()
-
 @bot.event
 async def on_ready():
-    await init_pool()
-    await init_db_queue()
-    print("[DB] Pool + Queue ready")
-
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", int(os.environ.get("PORT", 8080)))
-    await site.start()
+    global db_initialized
+    print("-" * 50)
+    print(f"Bot logged in as: {bot.user}")
+    print("-" * 50)
+    
     try:
-        await init_pool()
-        print("[DB] Connection pool initialized")
+        print("[DB] Initializing database connection...")
+        pool = await init_pool()
+        if pool is None:
+            print("[DB ERROR] Failed to initialize pool")
+        else:
+            db_initialized = True
+            print("[DB] ✓ Connected successfully")
+            if not keep_db_warm.is_running():
+                keep_db_warm.start()
     except Exception as e:
-        print(f"[DB ERROR] Failed to initialize pool: {e}")
-
-    if not keep_db_alive.is_running():
-        keep_db_alive.start()
-        print("[System] Background DB Warmer started!")
+        print(f"[DB ERROR] {e}")
 
     print("-" * 50)
-    print(f"Bot online: {bot.user}")
     print(f"Model: {MODEL_NAME}")
+    print(f"Database: {'✓' if db_initialized else '✗'}")
+    print(f"Proxy: {'✓' if PROXY_URL else '✗'}")
     print("-" * 50)
-
 
 @bot.event
 async def on_message(message):
+    global db_initialized
+    
     if message.author.bot or message.author == bot.user:
         return
     if message.author.id in BANNED_USERS:
@@ -110,14 +148,11 @@ async def on_message(message):
         return
 
     raw = message.content.strip().lower()
-
-    # hapus mention bot
     for m in message.mentions:
         raw = raw.replace(f"<@{m.id}>", "").replace(f"<@!{m.id}>", "")
     raw = raw.strip()
 
     greeting_set = {"hi", "hello", "halo", "hallo", "hey", "woy", "woi", "p"}
-
     if raw in greeting_set:
         await message.reply(
             "Halo, nama ku Lyra! kamu bisa panggil aku Ly loh biar keliatan akrab hehe :p",
@@ -125,7 +160,13 @@ async def on_message(message):
         )
         return
 
-    # Cooldown (non-master)
+    if not db_initialized:
+        await message.reply(
+            "Maaf, Ly masih dalam proses startup (｡•́︿•̀｡)",
+            mention_author=False
+        )
+        return
+
     uid = str(message.author.id)
     now = datetime.now()
 
@@ -133,8 +174,10 @@ async def on_message(message):
         if uid in user_cooldowns and (now - user_cooldowns[uid]).total_seconds() < COOLDOWN:
             return
         user_cooldowns[uid] = now
+        if len(user_cooldowns) > 1000:
+            cutoff = now - timedelta(minutes=5)
+            user_cooldowns = {k: v for k, v in user_cooldowns.items() if v > cutoff}
 
-    # Clean content
     content = message.content
     for m in message.mentions:
         content = content.replace(f"<@{m.id}>", "").replace(f"<@!{m.id}>", "")
@@ -145,11 +188,8 @@ async def on_message(message):
     user_name = message.author.name
     print(f"[MSG] {user_name}: {user_question}")
 
-    # ============================
-    # USER PROFILE (RAM to DB to GEN)
-    # ============================
+    # USER PROFILE
     user_summary = ""
-
     if uid in local_profile_cache:
         cached = local_profile_cache[uid]
         if now - cached["time"] < timedelta(hours=PROFILE_TTL_HOURS):
@@ -161,8 +201,8 @@ async def on_message(message):
             if row and now - row["last_updated"] < timedelta(hours=PROFILE_TTL_HOURS):
                 user_summary = row["summary"]
                 local_profile_cache[uid] = {"summary": user_summary, "time": now}
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[PROFILE ERROR] {e}")
 
     if not user_summary:
         try:
@@ -171,24 +211,18 @@ async def on_message(message):
             local_profile_cache[uid] = {"summary": summary, "time": now}
             if summary and "Belum ada" not in summary:
                 asyncio.create_task(save_profile(uid, summary))
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[PROFILE GEN ERROR] {e}")
 
-    # ============================
-    # SYSTEM PROMPT BUILD
-    # ============================
+    # SYSTEM PROMPT
     system_prompt = SYSTEM_PROMPT
     if message.author.id == MASTER_ID:
         system_prompt += "\n\n" + SYSTEM_PROMPT_MASTER
-
-    if user_summary:
+    if user_summary and "Belum ada" not in user_summary:
         system_prompt += f"\n\n# Info User:\n{user_summary}"
 
-    # ============================
-    # MEMORY SUMMARY (RAM to DB)
-    # ============================
+    # MEMORY SUMMARY
     memory_summary = ""
-
     if uid in local_memory_cache:
         if now - local_memory_cache[uid]["time"] < timedelta(hours=1):
             memory_summary = local_memory_cache[uid]["data"]
@@ -198,25 +232,20 @@ async def on_message(message):
             memory_summary = await get_memory_summary(uid)
             if memory_summary:
                 local_memory_cache[uid] = {"data": memory_summary, "time": now}
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[MEMORY ERROR] {e}")
 
     if memory_summary:
         system_prompt += f"\n\n# Ringkasan Percakapan Sebelumnya:\n{memory_summary}"
 
     system_prompt += f"\n\n[SYSTEM INFO: Waktu sekarang {now.strftime('%A, %d %B %Y, %H:%M WIB')}]"
 
-    # ============================
-    # LOAD CHAT HISTORY
-    # ============================
+    # LOAD HISTORY
     history = await load_history(uid) or []
 
-    # ============================
     # BACKGROUND SUMMARIZER
-    # ============================
     if len(history) > SUMMARY_TRIGGER:
         old_part = history[:-KEEP_RECENT]
-
         async def background_summarize():
             try:
                 summary = await summarize_history(old_part)
@@ -225,24 +254,17 @@ async def on_message(message):
                 await delete_old_history(uid, keep_last=KEEP_RECENT)
             except Exception as e:
                 print("[BG SUMMARIZE ERROR]", e)
-
         asyncio.create_task(background_summarize())
         history = history[-KEEP_RECENT:]
 
-    # ============================
     # CALL GROK
-    # ============================
     async with message.channel.typing():
         try:
             messages = [{"role": "system", "content": system_prompt}]
             messages.extend(history)
             messages.append({"role": "user", "content": user_question})
 
-            ai_answer = grok_chat(
-                messages,
-                temperature=0.5,
-                max_tokens=120
-            )
+            ai_answer = await grok_chat(messages, temperature=0.5, max_tokens=120)
 
             def sanitize(t):
                 return t.replace("@everyone", "@\u200beveryone").replace("@here", "@\u200bhere")
@@ -273,46 +295,63 @@ async def on_message(message):
 
     await bot.process_commands(message)
 
-# =========
 # Commands
 @bot.command()
 async def reset(ctx):
-    uid = str(ctx.author.id)
-    local_profile_cache.pop(uid, None)
-    local_memory_cache.pop(uid, None)
-
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        await conn.execute("DELETE FROM conversation_history WHERE user_id=$1", uid)
-        await conn.execute("DELETE FROM memory_summaries WHERE user_id=$1", uid)
-        await conn.execute("DELETE FROM user_profiles WHERE user_id=$1", uid)
-
-    await ctx.send("Ingatan Lyra tentangmu sudah dihapus.")
+    global db_initialized
+    if not db_initialized:
+        await ctx.send("Database belum siap.")
+        return
+    try:
+        pool = await get_pool()
+        if pool is None:
+            await ctx.send("Database tidak tersedia.")
+            return
+        uid = str(ctx.author.id)
+        local_profile_cache.pop(uid, None)
+        local_memory_cache.pop(uid, None)
+        async with pool.acquire() as conn:
+            await conn.execute("DELETE FROM conversation_history WHERE user_id=$1", uid)
+            await conn.execute("DELETE FROM memory_summaries WHERE user_id=$1", uid)
+            await conn.execute("DELETE FROM user_profiles WHERE user_id=$1", uid)
+        await ctx.send("Ingatan Lyra tentangmu sudah dihapus.")
+    except Exception as e:
+        print(f"[RESET ERROR] {e}")
+        await ctx.send("Gagal.")
 
 @bot.command()
 async def info(ctx):
-    help_text = """
+    await ctx.send("""
 **Cara menggunakan Lyra:**
 - Tag @Lyra untuk mengobrol
 - `!reset` - Hapus ingatan Lyra tentangmu
 - `!info` - Tampilkan pesan ini
+    """)
 
-Lyra akan mengingat percakapanmu dan belajar tentang preferensimu!
-    """
-    await ctx.send(help_text)
+@bot.command()
+async def dbstatus(ctx):
+    global db_initialized
+    status = f"Database: {'✅' if db_initialized else '❌'}\n"
+    status += f"Keepalive: {'✅' if keep_db_warm.is_running() else '❌'}\n"
+    status += f"Proxy: {'✅' if PROXY_URL else '❌'}"
+    
+    if db_initialized:
+        try:
+            pool = await get_pool()
+            async with pool.acquire() as conn:
+                await conn.fetchval("SELECT 1")
+            status += "\n✅ Connection OK"
+        except Exception as e:
+            status += f"\n❌ Error: {e}"
+    await ctx.send(status)
 
 @bot.event
 async def on_close():
+    if keep_db_warm.is_running():
+        keep_db_warm.cancel()
     await close_pool()
-    print("[DB] Connection pool closed")
 
 if __name__ == "__main__":
     if not DISCORD_TOKEN:
         raise RuntimeError("DISCORD_TOKEN Missing")
     bot.run(DISCORD_TOKEN)
-
-
-
-
-
-
